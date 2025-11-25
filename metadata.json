@@ -1,0 +1,8 @@
+{
+  "name": "FPTer Chat",
+  "description": "A high-end, scalable chat application UI for FPTers, featuring real-time messaging, video call interfaces, and embedded widget capabilities.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

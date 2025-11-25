@@ -1,0 +1,34 @@
+{
+  "name": "chat-application-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Chat application monorepo with React frontend and Java Spring Boot backend",
+  "scripts": {
+    "dev:web": "pnpm --filter web dev",
+    "dev:backend": "cd apps/backend && mvn spring-boot:run",
+    "build:web": "pnpm --filter web build",
+    "build:backend": "cd apps/backend && mvn clean package",
+    "build": "pnpm build:web && pnpm build:backend",
+    "install:all": "pnpm install && cd apps/backend && mvn clean install",
+    "docker:up": "docker-compose -f infra/docker/docker-compose.yml up",
+    "docker:down": "docker-compose -f infra/docker/docker-compose.yml down",
+    "docker:build": "docker-compose -f infra/docker/docker-compose.yml build"
+  },
+  "keywords": [
+    "monorepo",
+    "chat",
+    "react",
+    "spring-boot",
+    "java"
+  ],
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=8.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "typescript": "~5.8.2",
+    "prettier": "^3.0.0",
+    "eslint": "^8.0.0"
+  }
+}

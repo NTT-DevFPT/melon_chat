@@ -1,0 +1,81 @@
+// This file reflects the Database Schema discussed in the architecture.
+// It serves as the contract between the Frontend and the Microservices.
+
+// --- Users Service (PostgreSQL) ---
+export enum UserStatus {
+  ONLINE = 'ONLINE',
+  OFFLINE = 'OFFLINE',
+  AWAY = 'AWAY',
+  BUSY = 'BUSY'
+}
+
+export interface User {
+  id: string;
+  username: string;
+  fullName: string;
+  avatarUrl: string;
+  status: UserStatus;
+  lastSeen: string; // ISO Date
+}
+
+// --- Chat Service (MongoDB for History, Redis for Recent) ---
+export enum ConversationType {
+  DIRECT = 'DIRECT',
+  GROUP = 'GROUP'
+}
+
+export interface Participant {
+  userId: string;
+  role: 'ADMIN' | 'MEMBER';
+  joinedAt: string;
+}
+
+export interface Conversation {
+  id: string;
+  type: ConversationType;
+  name?: string; // For groups
+  avatarUrl?: string; // For groups
+  participants: string[]; // Array of User IDs
+  lastMessageId?: string;
+  unreadCount: number;
+  updatedAt: string;
+}
+
+export enum MessageType {
+  TEXT = 'TEXT',
+  IMAGE = 'IMAGE',
+  FILE = 'FILE',
+  VIDEO = 'VIDEO',
+  SYSTEM = 'SYSTEM'
+}
+
+export interface Attachment {
+  id: string;
+  url: string;
+  type: 'IMAGE' | 'VIDEO' | 'FILE';
+  name: string;
+  size: number;
+}
+
+export interface Message {
+  id: string;
+  conversationId: string;
+  senderId: string;
+  type: MessageType;
+  content: string; // Text content or Caption
+  attachments?: Attachment[];
+  createdAt: string;
+  status: 'SENDING' | 'SENT' | 'DELIVERED' | 'READ';
+  replyToId?: string;
+}
+
+// --- Call Service (Signaling/WebRTC) ---
+export interface CallSession {
+  id: string;
+  conversationId: string;
+  initiatorId: string;
+  participants: string[];
+  isActive: boolean;
+  startTime: string;
+  type: 'AUDIO' | 'VIDEO';
+}
