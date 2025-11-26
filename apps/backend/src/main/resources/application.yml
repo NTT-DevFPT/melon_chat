@@ -43,6 +43,11 @@ spring:
           connectiontimeout: 5000
           timeout: 5000
           writetimeout: 5000
+  
+  app:
+    jwtSecret: ${JWT_SECRET}
+    jwtExpirationInMs: 3600000
+    jwtRefreshExpirationInMs: 604800000
 
 logging:
   level:
