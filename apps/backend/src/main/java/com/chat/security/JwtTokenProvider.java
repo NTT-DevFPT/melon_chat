@@ -21,7 +21,7 @@ public class JwtTokenProvider {
 
     private static final Logger logger = LoggerFactory.getLogger(JwtTokenProvider.class);
 
-    @Value("${app.jwtSecret:9a4f2c8d3b7a1e6f4c5d8e0b2a9f7c6d5e4b3a2c1f0e9d8c7b6a5f4e3d2c1b0a}")
+    @Value("${app.jwtSecret}")
     private String jwtSecret;
 
     @Value("${app.jwtExpirationInMs:3600000}") // 1 hour
