@@ -33,6 +33,7 @@ public class User extends BaseEntity {
     private String email;
 
     @NotBlank(message = "Password is required")
+    @com.fasterxml.jackson.annotation.JsonIgnore
     @Column(name = "password", nullable = false, length = 255)
     private String password;
 
