@@ -4,10 +4,10 @@ spring:
       on-profile: prod
   
   datasource:
-    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/chatdb}
+    url: ${DATABASE_URL}
     driver-class-name: org.postgresql.Driver
-    username: ${DATABASE_USERNAME:postgres}
-    password: ${DATABASE_PASSWORD:postgres}
+    username: ${DATABASE_USERNAME}
+    password: ${DATABASE_PASSWORD}
   
   jpa:
     show-sql: false

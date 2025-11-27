@@ -5,7 +5,7 @@ server:
 
 spring:
   application:
-    name: chat-backend
+    name: melon-chat-backend
   
   datasource:
     url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/chatdb}
@@ -20,11 +20,10 @@ spring:
     properties:
       hibernate:
         format_sql: true
-<<<<<<< Updated upstream
-        dialect: org.hibernate.dialect.H2Dialect
-=======
         dialect: org.hibernate.dialect.PostgreSQLDialect
         # enable_lazy_load_no_trans: true # Avoid if possible, better to fix LazyInitializationException properly
+        enable_lazy_load_no_trans: true
+
   
   mail:
     host: ${MAIL_HOST:smtp.gmail.com}
@@ -41,12 +40,12 @@ spring:
           connectiontimeout: 5000
           timeout: 5000
           writetimeout: 5000
-  
+ 
 app:
   jwtSecret: ${JWT_SECRET:/B1n5iULIRV0tJ7A+QVo5RAJw4aGxETNrFfWEamJys4=}
   jwtExpirationInMs: 3600000
   jwtRefreshExpirationInMs: 604800000
->>>>>>> Stashed changes
+
 
 logging:
   level:
