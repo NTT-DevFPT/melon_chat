@@ -8,15 +8,10 @@ spring:
     name: chat-backend
   
   datasource:
-    url: jdbc:h2:mem:chatdb
-    driver-class-name: org.h2.Driver
-    username: sa
-    password: 
-  
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/chatdb}
+    driver-class-name: org.postgresql.Driver
+    username: ${DATABASE_USERNAME:postgres}
+    password: ${DATABASE_PASSWORD:1234}
   
   jpa:
     hibernate:
@@ -25,7 +20,33 @@ spring:
     properties:
       hibernate:
         format_sql: true
+<<<<<<< Updated upstream
         dialect: org.hibernate.dialect.H2Dialect
+=======
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        # enable_lazy_load_no_trans: true # Avoid if possible, better to fix LazyInitializationException properly
+  
+  mail:
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+          connectiontimeout: 5000
+          timeout: 5000
+          writetimeout: 5000
+  
+app:
+  jwtSecret: ${JWT_SECRET:/B1n5iULIRV0tJ7A+QVo5RAJw4aGxETNrFfWEamJys4=}
+  jwtExpirationInMs: 3600000
+  jwtRefreshExpirationInMs: 604800000
+>>>>>>> Stashed changes
 
 logging:
   level:
