@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { MessageSquare, Phone, Users, Settings, Search, Plus, UserPlus, Check, X, User as UserIcon } from 'lucide-react';
 import { Conversation, User, UserStatus } from '../types';
 import { Avatar } from './Avatar';
+import { client } from '../api/client';
+import { toast } from 'react-hot-toast';
 
 interface SidebarProps {
     conversations: Conversation[];
@@ -32,6 +34,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     // Friend Modal State
     const [isFriendModalOpen, setIsFriendModalOpen] = useState(false);
     const [friendSearchQuery, setFriendSearchQuery] = useState('');
+    const [searchResults, setSearchResults] = useState<User[]>([]);
+    const [isSearching, setIsSearching] = useState(false);
     const [sentFriendRequests, setSentFriendRequests] = useState<Set<string>>(new Set());
 
     const menuRef = useRef<HTMLDivElement>(null);
@@ -43,9 +47,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     };
 
     const getConversationAvatar = (conv: Conversation) => {
-        if (conv.type === 'GROUP') return conv.avatarUrl || 'https://picsum.photos/id/20/200/200';
+        if (conv.type === 'GROUP') return conv.avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(conv.name || 'G')}&background=FF6B9D&color=fff`;
         const otherUserId = conv.participants.find(id => id !== currentUserId);
-        return otherUserId ? users[otherUserId]?.avatarUrl : 'https://picsum.photos/200';
+        return otherUserId ? users[otherUserId]?.avatarUrl : `https://ui-avatars.com/api/?name=${encodeURIComponent(users[otherUserId || '']?.fullName || 'U')}&background=random`;
     };
 
     const getOtherUserStatus = (conv: Conversation) => {
@@ -64,6 +68,29 @@ export const Sidebar: React.FC<SidebarProps> = ({
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
+
+    // Search users when query changes
+    useEffect(() => {
+        if (!friendSearchQuery.trim()) {
+            setSearchResults([]);
+            return;
+        }
+
+        const delayDebounceFn = setTimeout(async () => {
+            setIsSearching(true);
+            try {
+                const response = await client.get<User[]>(`/users/search?query=${friendSearchQuery}`);
+                // Filter out current user from results
+                setSearchResults(response.data.filter(u => u.id !== currentUserId));
+            } catch (error) {
+                console.error("Search failed", error);
+            } finally {
+                setIsSearching(false);
+            }
+        }, 500);
+
+        return () => clearTimeout(delayDebounceFn);
+    }, [friendSearchQuery, currentUserId]);
 
     const toggleParticipant = (userId: string) => {
         setSelectedParticipants(prev =>
@@ -85,26 +112,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
         setIsMenuOpen(false);
         setIsFriendModalOpen(true);
         setFriendSearchQuery('');
+        setSearchResults([]);
     };
 
-    const handleSendFriendRequest = (userId: string) => {
-        const newSet = new Set(sentFriendRequests);
-        newSet.add(userId);
-        setSentFriendRequests(newSet);
+    const handleSendFriendRequest = async (userId: string) => {
+        try {
+            await client.post(`/friendships/request/${userId}`);
+            const newSet = new Set(sentFriendRequests);
+            newSet.add(userId);
+            setSentFriendRequests(newSet);
+            toast.success("Friend request sent!");
+        } catch (error) {
+            console.error("Failed to send friend request", error);
+            toast.error("Failed to send friend request");
+        }
     };
-
-    const filteredUsersForFriend = Object.values(users).filter(user =>
-        user.id !== currentUserId &&
-        (user.fullName.toLowerCase().includes(friendSearchQuery.toLowerCase()) ||
-            user.username.toLowerCase().includes(friendSearchQuery.toLowerCase()))
-    );
 
     return (
         <div className="w-80 h-full bg-slate-900 border-r border-slate-800 flex flex-col flex-shrink-0">
             {/* Header */}
             <div className="p-4 flex items-center justify-between relative">
                 <div className="flex items-center space-x-3">
-                    <img src="/logo.png" alt="Melon Chat Logo" className="w-10 h-10 melon-logo" />
+                    <img src="/logo.png" alt="Melon Chat Logo" className="w-10 h-10 melon-logo" onError={(e) => e.currentTarget.style.display = 'none'} />
                     <h1 className="text-xl font-bold text-white tracking-tight">Melon <span style={{ color: '#FF6B9D' }}>Chat</span> 🍉</h1>
                 </div>
 
@@ -204,7 +233,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div className="flex items-center space-x-3">
                     <Avatar src={users[currentUserId]?.avatarUrl} alt="My Profile" size="sm" status={UserStatus.ONLINE} />
                     <div className="flex flex-col">
-                        <span className="text-sm font-medium text-white">{users[currentUserId]?.fullName}</span>
+                        <span className="text-sm font-medium text-white">{users[currentUserId]?.fullName || 'Me'}</span>
                         <span className="text-xs text-green-400">Online</span>
                     </div>
                 </div>
@@ -346,15 +375,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
                             <div className="mb-2">
                                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
-                                    {friendSearchQuery ? 'Search Results' : 'Suggested People'}
+                                    {friendSearchQuery ? 'Search Results' : 'Start typing to search'}
                                 </label>
                                 <div className="space-y-2 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
-                                    {filteredUsersForFriend.length === 0 ? (
+                                    {isSearching ? (
+                                        <div className="text-center py-8 text-slate-500 text-sm">Searching...</div>
+                                    ) : searchResults.length === 0 && friendSearchQuery ? (
                                         <div className="text-center py-8 text-slate-500 text-sm">
                                             No users found matching "{friendSearchQuery}"
                                         </div>
                                     ) : (
-                                        filteredUsersForFriend.map(user => {
+                                        searchResults.map(user => {
                                             const isSent = sentFriendRequests.has(user.id);
                                             return (
                                                 <div
@@ -372,8 +403,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                                         onClick={() => handleSendFriendRequest(user.id)}
                                                         disabled={isSent}
                                                         className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${isSent
-                                                                ? 'bg-slate-700 text-slate-400 cursor-default'
-                                                                : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-900/20'
+                                                            ? 'bg-slate-700 text-slate-400 cursor-default'
+                                                            : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-900/20'
                                                             }`}
                                                     >
                                                         {isSent ? 'Request Sent' : 'Add Friend'}
