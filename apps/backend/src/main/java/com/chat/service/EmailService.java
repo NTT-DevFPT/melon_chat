@@ -28,39 +28,38 @@ public class EmailService {
 
     /**
      * Send plain email
+     * Sends from melonchat05@gmail.com (configured in application.yml)
      */
     public void sendEmail(String to, String subject, String body) {
-        // If email username is not configured, just log the email
-        if (fromEmail == null || fromEmail.isEmpty() || fromEmail.contains("noreply@melonchat.com")) {
-            logger.info("Skipping email sending (no SMTP config). To: {}, Subject: {}", to, subject);
-            logger.info("Body: {}", body);
-            return;
-        }
-
+        // Ensure fromEmail is set to melonchat05@gmail.com
+        String senderEmail = (fromEmail != null && !fromEmail.isEmpty()) ? fromEmail : "melonchat05@gmail.com";
+        
         try {
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
 
-            helper.setFrom(fromEmail);
+            helper.setFrom(senderEmail);
             helper.setTo(to);
             helper.setSubject(subject);
             helper.setText(body, true); // true = HTML
 
             mailSender.send(message);
-            logger.info("Email sent successfully to: {}", to);
+            logger.info("Email sent successfully from {} to: {}", senderEmail, to);
 
         } catch (MessagingException e) {
-            logger.error("Failed to send email to: {}", to, e);
+            logger.error("Failed to send email from {} to: {}", senderEmail, to, e);
             throw new RuntimeException("Failed to send email", e);
         }
     }
 
     /**
      * Send OTP email with template
+     * Sends to the user's email address
      */
     public void sendOTPEmail(String to, String code, OTPType type) {
         String subject = EmailTemplates.getOTPSubject(type);
         String body = EmailTemplates.getOTPBody(code, type);
+        logger.info("Sending OTP email to: {}, Code: {}", to, code);
         sendEmail(to, subject, body);
     }
 

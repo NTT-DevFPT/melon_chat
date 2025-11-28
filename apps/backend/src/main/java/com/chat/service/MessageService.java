@@ -144,9 +144,32 @@ public class MessageService {
 
     /**
      * Get unread count for a room
+     * Unread = messages from others AFTER lastReadAt (or after user's last message if never read)
      */
     public long getUnreadCount(UUID roomId, UUID userId) {
-        return messageRepository.countUnreadMessages(roomId, userId);
+        // Get RoomMember to check lastReadAt
+        RoomMember member = roomMemberRepository.findByRoomIdAndUserId(roomId, userId)
+                .orElseThrow(() -> new UnauthorizedException("You are not a member of this room"));
+        
+        LocalDateTime since;
+        
+        if (member.getLastReadAt() != null) {
+            // User has read messages - count from lastReadAt
+            since = member.getLastReadAt();
+        } else {
+            // User never read - count from their last message (or join time if never sent)
+            List<Message> userLastMessages = messageRepository.findLastMessageByUser(roomId, userId);
+            if (!userLastMessages.isEmpty()) {
+                // User has sent messages - count from their last message
+                since = userLastMessages.get(0).getCreatedAt();
+            } else {
+                // User never sent a message - count from when they joined
+                since = member.getJoinedAt();
+            }
+        }
+        
+        // Count messages from others after that time
+        return messageRepository.countMessagesFromOthersAfter(roomId, userId, since);
     }
 
     /**

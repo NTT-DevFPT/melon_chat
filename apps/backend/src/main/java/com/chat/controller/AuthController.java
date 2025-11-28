@@ -43,10 +43,33 @@ public class AuthController {
     public ResponseEntity<AuthResponse> authenticateUser(@Valid @RequestBody LoginRequest loginRequest) {
         System.out.println("Login request received for: " + loginRequest.getUsername());
         try {
-            Authentication authentication = authenticationManager.authenticate(
-                    new UsernamePasswordAuthenticationToken(
-                            loginRequest.getUsername(),
-                            loginRequest.getPassword()));
+            // Check if user exists first
+            User user;
+            try {
+                user = userService.getUserByUsername(loginRequest.getUsername());
+            } catch (com.chat.exception.ResourceNotFoundException e) {
+                try {
+                    user = userService.getUserByEmail(loginRequest.getUsername());
+                } catch (com.chat.exception.ResourceNotFoundException e2) {
+                    throw new com.chat.exception.InvalidCredentialsException("Account does not exist");
+                }
+            }
+
+            // Check if account is active
+            if (!user.getIsActive()) {
+                throw new com.chat.exception.InvalidCredentialsException("Account is inactive. Please contact support.");
+            }
+
+            // Try authentication
+            Authentication authentication;
+            try {
+                authentication = authenticationManager.authenticate(
+                        new UsernamePasswordAuthenticationToken(
+                                loginRequest.getUsername(),
+                                loginRequest.getPassword()));
+            } catch (org.springframework.security.authentication.BadCredentialsException e) {
+                throw new com.chat.exception.InvalidCredentialsException("Incorrect password");
+            }
 
             System.out.println("Authentication successful for: " + loginRequest.getUsername());
             SecurityContextHolder.getContext().setAuthentication(authentication);
@@ -54,42 +77,40 @@ public class AuthController {
             String jwt = tokenProvider.generateToken(authentication);
             String refreshToken = tokenProvider.generateRefreshToken(authentication);
 
-            // Get user details
-            User user = userService.getUserByUsername(authentication.getName()); // This might fail if login with email,
-                                                                                 // need to handle
-            // Better way: CustomUserDetailsService returns UserPrincipal which has ID
-            // Let's get ID from authentication principal
-            // But we need the full User object for the response
-
-            // Actually, authentication.getName() returns the username from UserDetails
-            // (UserPrincipal)
-            // UserPrincipal.getUsername() returns the username.
-            // So userService.getUserByUsername() should work.
-
             User updatedUser = userService.updateUserStatus(user.getId(), UserStatus.ONLINE);
 
             return ResponseEntity.ok(new AuthResponse(jwt, refreshToken, updatedUser));
+        } catch (com.chat.exception.InvalidCredentialsException e) {
+            throw e; // Re-throw to be handled by GlobalExceptionHandler
         } catch (Exception e) {
             System.out.println("Login failed for: " + loginRequest.getUsername());
             e.printStackTrace();
-            throw e;
+            throw new com.chat.exception.InvalidCredentialsException("Login failed. Please check your credentials.");
         }
     }
 
     @PostMapping("/register")
     public ResponseEntity<?> registerUser(@Valid @RequestBody RegisterRequest registerRequest) {
-        User user = new User();
-        user.setUsername(registerRequest.getUsername());
-        user.setFullName(registerRequest.getFullName());
-        user.setEmail(registerRequest.getEmail());
-        user.setPassword(registerRequest.getPassword());
+        try {
+            User user = new User();
+            user.setUsername(registerRequest.getUsername());
+            user.setFullName(registerRequest.getFullName());
+            user.setEmail(registerRequest.getEmail());
+            user.setPassword(registerRequest.getPassword());
 
-        User result = userService.createUser(user);
+            User result = userService.createUser(user);
 
-        // Generate and send OTP
-        otpService.generateAndSendOTP(result.getEmail(), OTPType.REGISTRATION);
+            // Generate and send OTP (won't fail registration if email sending fails)
+            otpService.generateAndSendOTP(result.getEmail(), OTPType.REGISTRATION);
 
-        return ResponseEntity.ok("User registered successfully. Please check your email for verification code.");
+            return ResponseEntity.ok("User registered successfully. Please check your email for verification code.");
+        } catch (com.chat.exception.DuplicateResourceException e) {
+            throw e; // Re-throw to be handled by GlobalExceptionHandler
+        } catch (Exception e) {
+            System.err.println("Registration failed: " + e.getMessage());
+            e.printStackTrace();
+            throw new RuntimeException("Registration failed: " + e.getMessage());
+        }
     }
 
     @PostMapping("/verify-email")

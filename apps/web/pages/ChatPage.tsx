@@ -20,6 +20,7 @@ export const ChatPage: React.FC = () => {
     const [isCallOpen, setIsCallOpen] = useState(false);
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+    const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
     const [users, setUsers] = useState<Record<string, User>>({});
     const [friends, setFriends] = useState<User[]>([]);
     const [pendingRequests, setPendingRequests] = useState<PendingFriendRequest[]>([]);
@@ -44,14 +45,20 @@ export const ChatPage: React.FC = () => {
         if (!token) return;
 
         webSocketService.connect(token, () => {
-            webSocketService.subscribe('/user/queue/messages', (message: Message) => {
+            webSocketService.subscribe('/user/queue/messages', async (message: Message) => {
+                const isActive = activeConvIdRef.current === message.conversationId;
+                
                 // Handle new message
-                if (activeConvIdRef.current === message.conversationId) {
+                if (isActive) {
                     setMessages(prev => [...prev, message]);
-                    // Mark as read? (API call needed)
-                } else {
-                    // Optional: Show toast notification
-                    // toast.success(`New message`);
+                    // Mark as read immediately if in active room (user is viewing, so automatically read)
+                    try {
+                        await client.post(`/chats/${message.conversationId}/read`);
+                        // Refresh conversations to sync with backend after marking as read
+                        setTimeout(() => loadConversations(), 300);
+                    } catch (err) {
+                        console.error("Failed to mark as read", err);
+                    }
                 }
 
                 // Update conversations list
@@ -59,14 +66,18 @@ export const ChatPage: React.FC = () => {
                     const index = prev.findIndex(c => c.id === message.conversationId);
                     if (index !== -1) {
                         const current = prev[index];
+                        // If active room, unreadCount is always 0 (user is viewing)
+                        // If not active, increment unreadCount only if message is from others
+                        const isMyMessage = message.senderId === currentUser?.id;
                         const unreadBase = current.unreadCount ?? 0;
                         const updatedConv: Conversation = {
                             ...current,
                             updatedAt: message.createdAt,
                             lastMessageId: message.id,
                             lastMessageContent: message.content,
+                            lastMessageSenderId: message.senderId,
                             lastMessageAt: message.createdAt,
-                            unreadCount: activeConvIdRef.current === message.conversationId ? unreadBase : unreadBase + 1
+                            unreadCount: isActive ? 0 : (isMyMessage ? 0 : unreadBase + 1)
                         };
                         const newConvs = [...prev];
                         newConvs.splice(index, 1);
@@ -87,18 +98,46 @@ export const ChatPage: React.FC = () => {
     const loadConversations = useCallback(async () => {
         try {
             const response = await client.get<Conversation[]>('/chats');
-            setConversations(response.data);
-            setActiveConvId(prev => prev ?? (response.data[0]?.id ?? null));
-            return response.data;
+            // Trust backend unreadCount - only override for active room if we're currently viewing it
+            const updated = response.data.map(conv => {
+                // If this is the active room and we're viewing it, ensure unreadCount = 0
+                // Otherwise, trust backend value
+                if (conv.id === activeConvId && activeConvId) {
+                    return { ...conv, unreadCount: 0 };
+                }
+                return conv;
+            });
+            setConversations(updated);
+            setActiveConvId(prev => prev ?? (updated[0]?.id ?? null));
+            return updated;
         } catch (error) {
             console.error("Failed to fetch conversations", error);
             return [];
         }
-    }, []);
+    }, [activeConvId]);
 
-    // Fetch conversations (Initial only)
+    // Fetch conversations (Initial + Auto-refresh)
     useEffect(() => {
         loadConversations();
+    }, [loadConversations]);
+
+    // Auto-refresh conversations periodically
+    useEffect(() => {
+        const interval = setInterval(() => {
+            loadConversations();
+        }, 5000); // Refresh every 5 seconds
+        return () => clearInterval(interval);
+    }, [loadConversations]);
+
+    // Refresh conversations when tab becomes visible
+    useEffect(() => {
+        const handleVisibility = () => {
+            if (document.visibilityState === 'visible') {
+                loadConversations();
+            }
+        };
+        document.addEventListener('visibilitychange', handleVisibility);
+        return () => document.removeEventListener('visibilitychange', handleVisibility);
     }, [loadConversations]);
 
     const normalizeMessages = (payload: { content?: Message[] } | Message[]) => {
@@ -129,17 +168,47 @@ export const ChatPage: React.FC = () => {
             });
             if (response.data.length) {
                 setMessages(prev => [...prev, ...response.data]);
+                // If this is the active room, mark as read (user is viewing, so automatically read)
+                if (activeConvIdRef.current === conversationId) {
+                    try {
+                        await client.post(`/chats/${conversationId}/read`);
+                        // Refresh conversations to sync with backend
+                        setTimeout(() => loadConversations(), 300);
+                    } catch (err) {
+                        console.error("Failed to mark as read", err);
+                    }
+                }
             }
         } catch (error) {
             console.error("Failed to fetch recent messages", error);
         }
-    }, [messages, fetchMessages]);
+    }, [messages, fetchMessages, loadConversations]);
 
-    // Fetch messages for active conversation
+    // Fetch messages for active conversation and mark as read
     useEffect(() => {
         if (!activeConvId) return;
         fetchMessages(activeConvId);
-    }, [activeConvId, fetchMessages]);
+        
+        // Mark conversation as read when entering the room (call backend)
+        const markAsRead = async () => {
+            try {
+                await client.post(`/chats/${activeConvId}/read`);
+                // Refresh conversations to sync with backend after marking as read
+                // This ensures lastReadAt is updated and unreadCount is correct
+                setTimeout(() => loadConversations(), 300);
+            } catch (error) {
+                console.error("Failed to mark as read", error);
+            }
+        };
+        markAsRead();
+        
+        // Update UI immediately (optimistic update)
+        setConversations(prev => prev.map(conv => 
+            conv.id === activeConvId 
+                ? { ...conv, unreadCount: 0 }
+                : conv
+        ));
+    }, [activeConvId, fetchMessages, loadConversations]);
 
     // Poll only recent messages to keep near-realtime with minimal payload
     useEffect(() => {
@@ -180,7 +249,7 @@ export const ChatPage: React.FC = () => {
         loadPendingRequests();
     }, [loadPendingRequests]);
 
-    // Presence polling
+    // Presence polling for friends
     useEffect(() => {
         const interval = setInterval(() => {
             loadFriends();
@@ -188,15 +257,26 @@ export const ChatPage: React.FC = () => {
         return () => clearInterval(interval);
     }, [loadFriends]);
 
+    // Auto-refresh pending requests periodically
+    useEffect(() => {
+        const interval = setInterval(() => {
+            loadPendingRequests();
+        }, 10000); // Refresh every 10 seconds
+        return () => clearInterval(interval);
+    }, [loadPendingRequests]);
+
+    // Refresh all data when tab becomes visible
     useEffect(() => {
         const handleVisibility = () => {
             if (document.visibilityState === 'visible') {
                 loadFriends();
+                loadPendingRequests();
+                loadConversations();
             }
         };
         document.addEventListener('visibilitychange', handleVisibility);
         return () => document.removeEventListener('visibilitychange', handleVisibility);
-    }, [loadFriends]);
+    }, [loadFriends, loadPendingRequests, loadConversations]);
 
     // Scroll to bottom on new message
     const scrollToBottom = () => {
@@ -236,6 +316,7 @@ export const ChatPage: React.FC = () => {
             // But let's fetch just in case WS is slow or disconnected.
             if (response.data) {
                 setMessages(prev => [...prev, response.data]);
+                // Update conversation immediately
                 setConversations(prev => prev.map(conv =>
                     conv.id === activeConvId
                         ? {
@@ -243,10 +324,14 @@ export const ChatPage: React.FC = () => {
                             updatedAt: response.data.createdAt,
                             lastMessageId: response.data.id,
                             lastMessageContent: response.data.content,
-                            lastMessageAt: response.data.createdAt
+                            lastMessageSenderId: response.data.senderId,
+                            lastMessageAt: response.data.createdAt,
+                            unreadCount: 0 // Mark as read since we're in the room
                         }
                         : conv
                 ));
+                // Refresh conversations to sync with backend
+                setTimeout(() => loadConversations(), 500);
             } else {
                 await fetchMessages(activeConvId);
             }
@@ -320,7 +405,8 @@ export const ChatPage: React.FC = () => {
         try {
             await client.put(`/friendships/${friendshipId}/accept`);
             toast.success("Friend request accepted");
-            await Promise.all([loadFriends(), loadPendingRequests()]);
+            // Auto-refresh all data
+            await Promise.all([loadFriends(), loadPendingRequests(), loadConversations()]);
         } catch (error) {
             console.error("Failed to accept friend request", error);
             toast.error("Failed to accept request");
@@ -331,6 +417,7 @@ export const ChatPage: React.FC = () => {
         try {
             await client.put(`/friendships/${friendshipId}/reject`);
             toast.success("Friend request rejected");
+            // Auto-refresh pending requests
             await loadPendingRequests();
         } catch (error) {
             console.error("Failed to reject friend request", error);
@@ -425,16 +512,22 @@ export const ChatPage: React.FC = () => {
                                 <button
                                     className="p-2 hover:bg-slate-800 rounded-full transition-colors"
                                     onClick={() => setIsCallOpen(true)}
+                                    title="Phone Call"
                                 >
                                     <Phone size={20} />
                                 </button>
                                 <button
                                     className="p-2 hover:bg-slate-800 rounded-full transition-colors"
                                     onClick={() => setIsCallOpen(true)}
+                                    title="Video Call"
                                 >
                                     <Video size={20} />
                                 </button>
-                                <button className="p-2 hover:bg-slate-800 rounded-full transition-colors text-slate-400" onClick={logout}>
+                                <button
+                                    className="p-2 hover:bg-slate-800 rounded-full transition-colors"
+                                    onClick={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
+                                    title={isRightSidebarOpen ? "Hide Info" : "Show Info"}
+                                >
                                     <MoreVertical size={20} />
                                 </button>
                             </div>
@@ -553,22 +646,92 @@ export const ChatPage: React.FC = () => {
             {/* Settings Modal */}
             <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
 
-            {/* Optional Right Sidebar (Details) - Hidden on small screens */}
-            {activeConvId && (
-                <div className="hidden lg:block w-72 border-l border-slate-800 bg-slate-900 p-6">
-                    <div className="flex flex-col items-center">
-                        <img src={headerInfo.avatar} className="w-24 h-24 rounded-full object-cover mb-4 border-4 border-slate-800 shadow-lg" alt="Profile" />
-                        <h3 className="text-lg font-bold text-slate-100">{headerInfo.title}</h3>
-                        <p className="text-sm text-slate-400">{headerInfo.subtitle}</p>
-                    </div>
+            {/* Optional Right Sidebar (Details) - Toggleable */}
+            {activeConvId && isRightSidebarOpen && (
+                <div className="hidden lg:block w-80 border-l border-slate-800 bg-slate-900 flex flex-col">
+                    <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
+                        {/* Profile Section */}
+                        <div className="flex flex-col items-center mb-6">
+                            <img src={headerInfo.avatar} className="w-24 h-24 rounded-full object-cover mb-4 border-4 border-slate-800 shadow-lg" alt="Profile" />
+                            <h3 className="text-lg font-bold text-slate-100">{headerInfo.title}</h3>
+                            <p className="text-sm text-slate-400">{headerInfo.subtitle}</p>
+                        </div>
 
-                    <div className="mt-8">
-                        <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4">Options</h4>
-                        <ul className="space-y-2">
-                            <li className="text-sm text-slate-300 hover:text-white cursor-pointer py-1">Search in Conversation</li>
-                            <li className="text-sm text-slate-300 hover:text-white cursor-pointer py-1">Notifications</li>
-                            <li className="text-sm text-red-400 hover:text-red-300 cursor-pointer py-1 mt-4">Block User</li>
-                        </ul>
+                        {/* Options Section */}
+                        <div className="mb-6">
+                            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4">OPTIONS</h4>
+                            <ul className="space-y-2">
+                                <li className="text-sm text-slate-300 hover:text-white cursor-pointer py-2 px-3 rounded-lg hover:bg-slate-800 transition-colors">
+                                    Search in Conversation
+                                </li>
+                                <li className="text-sm text-slate-300 hover:text-white cursor-pointer py-2 px-3 rounded-lg hover:bg-slate-800 transition-colors">
+                                    Notifications
+                                </li>
+                                <li className="text-sm text-red-400 hover:text-red-300 cursor-pointer py-2 px-3 rounded-lg hover:bg-slate-800 transition-colors mt-4">
+                                    Block User
+                                </li>
+                            </ul>
+                        </div>
+
+                        {/* Media & Files Section */}
+                        <div>
+                            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4">MEDIA & FILES</h4>
+                            <div className="space-y-4">
+                                {/* Images */}
+                                <div>
+                                    <div className="flex items-center justify-between mb-3">
+                                        <span className="text-sm text-slate-300 font-medium">Images</span>
+                                        <span className="text-xs text-slate-500">
+                                            {messages.filter(m => m.type === MessageType.IMAGE || m.attachments?.some(a => a.type === 'IMAGE')).length}
+                                        </span>
+                                    </div>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {messages
+                                            .filter(m => m.type === MessageType.IMAGE || m.attachments?.some(a => a.type === 'IMAGE'))
+                                            .slice(0, 9)
+                                            .map((message) => {
+                                                const imageUrl = message.attachments?.find(a => a.type === 'IMAGE')?.url || message.content;
+                                                return (
+                                                    <div key={message.id} className="aspect-square rounded-lg overflow-hidden bg-slate-800 cursor-pointer hover:opacity-80 transition-opacity">
+                                                        <img src={imageUrl} alt="Media" className="w-full h-full object-cover" />
+                                                    </div>
+                                                );
+                                            })}
+                                    </div>
+                                </div>
+
+                                {/* Files */}
+                                <div>
+                                    <div className="flex items-center justify-between mb-3">
+                                        <span className="text-sm text-slate-300 font-medium">Files</span>
+                                        <span className="text-xs text-slate-500">
+                                            {messages.filter(m => m.type === MessageType.FILE || m.attachments?.some(a => a.type === 'FILE')).length}
+                                        </span>
+                                    </div>
+                                    <div className="space-y-2">
+                                        {messages
+                                            .filter(m => m.type === MessageType.FILE || m.attachments?.some(a => a.type === 'FILE'))
+                                            .slice(0, 5)
+                                            .map((message) => {
+                                                const file = message.attachments?.find(a => a.type === 'FILE');
+                                                return (
+                                                    <div key={message.id} className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-800 cursor-pointer transition-colors">
+                                                        <div className="w-10 h-10 bg-slate-700 rounded flex items-center justify-center">
+                                                            <Paperclip size={16} className="text-slate-400" />
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <p className="text-sm text-slate-200 truncate">{file?.name || 'File'}</p>
+                                                            <p className="text-xs text-slate-500">
+                                                                {file?.size ? `${(file.size / 1024).toFixed(1)} KB` : 'Unknown size'}
+                                                            </p>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             )}

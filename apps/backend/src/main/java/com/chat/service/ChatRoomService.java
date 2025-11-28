@@ -15,6 +15,7 @@ import com.chat.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -40,6 +41,13 @@ public class ChatRoomService {
 
     @Autowired
     private UserRepository userRepository;
+
+    @Autowired
+    private com.chat.repository.MessageRepository messageRepository;
+
+    @Autowired
+    @Lazy
+    private com.chat.service.MessageService messageService;
 
     /**
      * Create a direct message room between two users
@@ -120,7 +128,7 @@ public class ChatRoomService {
     public List<ChatRoomResponse> getUserRoomResponses(UUID userId) {
         List<ChatRoom> rooms = chatRoomRepository.findUserChatRooms(userId);
         return rooms.stream()
-                .map(this::mapRoomToResponse)
+                .map(room -> mapRoomToResponse(room, userId))
                 .collect(Collectors.toList());
     }
 
@@ -260,17 +268,39 @@ public class ChatRoomService {
     }
 
     public ChatRoomResponse mapRoomToResponse(ChatRoom room) {
+        return mapRoomToResponse(room, null);
+    }
+
+    public ChatRoomResponse mapRoomToResponse(ChatRoom room, UUID userId) {
         ChatRoomResponse response = new ChatRoomResponse();
         response.setId(room.getId());
         response.setType(room.getType());
         response.setName(room.getName());
         response.setAvatarUrl(room.getAvatarUrl());
         response.setUpdatedAt(room.getUpdatedAt());
-        response.setUnreadCount(0L);
+        
         List<UUID> participants = roomMemberRepository.findByRoomId(room.getId()).stream()
                 .map(RoomMember::getUserId)
                 .collect(Collectors.toList());
         response.setParticipants(participants);
+        
+        // Get last message
+        com.chat.model.Message lastMessage = messageRepository.findLastMessage(room.getId());
+        if (lastMessage != null) {
+            response.setLastMessageContent(lastMessage.getContent());
+            response.setLastMessageSenderId(lastMessage.getSenderId());
+            response.setLastMessageId(lastMessage.getId());
+            response.setUpdatedAt(lastMessage.getCreatedAt());
+        }
+        
+        // Calculate unread count if userId is provided
+        if (userId != null) {
+            long unreadCount = messageService.getUnreadCount(room.getId(), userId);
+            response.setUnreadCount(unreadCount);
+        } else {
+            response.setUnreadCount(0L);
+        }
+        
         return response;
     }
 }

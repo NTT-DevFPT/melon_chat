@@ -47,13 +47,15 @@ public class OTPService {
         OTP otp = new OTP(code, email, type, OTP_VALIDITY_MINUTES);
         otpRepository.save(otp);
 
-        // Send email
+        // Send email (don't fail if email sending fails - OTP is still saved in DB)
         try {
             emailService.sendOTPEmail(email, code, type);
-            logger.info("OTP sent to email: {} for type: {}", email, type);
+            logger.info("OTP sent successfully to email: {} for type: {}", email, type);
         } catch (Exception e) {
-            logger.error("Failed to send OTP email to: {}", email, e);
-            throw new RuntimeException("Failed to send OTP email", e);
+            logger.error("Failed to send OTP email to: {} - OTP code: {} (saved in database, can verify manually)", email, code, e);
+            // Don't throw exception - OTP is already saved, user can verify manually
+            // Log the OTP code for debugging if email fails
+            logger.warn("OTP CODE (if email failed): {} (for email: {}, type: {})", code, email, type);
         }
     }
 

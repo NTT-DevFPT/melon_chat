@@ -2,12 +2,6 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
-const featureCards = [
-    { title: 'Realtime delivery', desc: 'Powered by secure WebSockets' },
-    { title: 'Crystal-clear voice', desc: 'Spatial audio & noise cancel' },
-    { title: 'Smart notifications', desc: 'Mentions + friend requests' }
-];
-
 export const LoginPage: React.FC = () => {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
@@ -34,32 +28,16 @@ export const LoginPage: React.FC = () => {
             </div>
             <div className="relative z-10 flex min-h-screen items-center justify-center px-6 py-12">
                 <div className="grid w-full max-w-6xl gap-12 rounded-3xl border border-white/5 bg-white/5 p-8 backdrop-blur-3xl shadow-[0_20px_120px_rgba(15,23,42,0.7)] lg:grid-cols-[1.15fr_0.85fr]">
-                    <div className="space-y-8">
+                    <div className="flex flex-col justify-center space-y-8">
                         <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.3em] text-white/70">
-                            <span className="text-sm">🍉</span> melon.chat
+                            <span className="text-sm">🍉</span> MELON.CHAT
                         </div>
                         <div className="space-y-6">
                             <h1 className="text-4xl font-black leading-tight text-white sm:text-5xl">
-                                Realtime conversations designed for teams who love delightful UI.
+                                Welcome back
                             </h1>
                             <p className="text-base text-slate-300 sm:text-lg">
-                                Hop back into your rooms, sync across devices and enjoy buttery-smooth chatting
-                                with a playful watermelon touch.
-                            </p>
-                        </div>
-                        <dl className="grid gap-4 sm:grid-cols-3">
-                            {featureCards.map(card => (
-                                <div key={card.title} className="rounded-2xl border border-white/10 bg-black/20 p-4 shadow-inner shadow-black/40">
-                                    <dt className="text-sm uppercase tracking-wide text-white/60">{card.title}</dt>
-                                    <dd className="mt-2 text-lg font-semibold">{card.desc}</dd>
-                                </div>
-                            ))}
-                        </dl>
-
-                        <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-emerald-200">
-                            <div className="text-2xl font-semibold">48K+</div>
-                            <p className="text-sm leading-tight text-emerald-100/80">
-                                Active members trust Melon Chat every week for quick syncs, standups and late-night catchups.
+                                Sign in to continue the conversation.
                             </p>
                         </div>
                     </div>

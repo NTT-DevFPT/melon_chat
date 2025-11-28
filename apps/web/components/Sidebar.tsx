@@ -142,7 +142,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     };
 
     return (
-        <div className="w-80 h-full bg-slate-900 border-r border-slate-800 flex flex-col flex-shrink-0">
+        <div className="w-96 h-full bg-slate-900 border-r border-slate-800 flex flex-col flex-shrink-0">
             {/* Header */}
             <div className="p-4 flex items-center justify-between relative">
                 <div className="flex items-center space-x-3">
@@ -254,17 +254,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                     <p
                                         className={`text-xs truncate max-w-[140px] ${conv.unreadCount && conv.unreadCount > 0 ? 'text-slate-100 font-semibold' : 'text-slate-400'}`}
                                     >
-                                        {conv.lastMessageContent
-                                            ? conv.lastMessageContent
-                                            : conv.unreadCount && conv.unreadCount > 0
-                                                ? 'New message received'
-                                                : 'Click to view conversation'}
+                                        {(() => {
+                                            if (conv.unreadCount && conv.unreadCount > 1) {
+                                                return `${conv.unreadCount} new messages`;
+                                            }
+                                            if (conv.lastMessageContent) {
+                                                const isMyMessage = conv.lastMessageSenderId === currentUserId;
+                                                return isMyMessage ? `You: ${conv.lastMessageContent}` : conv.lastMessageContent;
+                                            }
+                                            if (conv.unreadCount && conv.unreadCount === 1) {
+                                                return 'New message received';
+                                            }
+                                            return 'Click to view conversation';
+                                        })()}
                                     </p>
-                                    {conv.unreadCount && conv.unreadCount > 0 && (
-                                        <span className="flex items-center justify-center w-5 h-5 text-white text-[10px] font-bold rounded-full" style={{ backgroundColor: '#FF6B9D' }}>
-                                            {conv.unreadCount}
-                                        </span>
-                                    )}
                                 </div>
                             </div>
                         </div>

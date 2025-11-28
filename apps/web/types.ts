@@ -47,6 +47,7 @@ export interface Conversation {
   participants?: string[]; // Array of User IDs, optional when backend omits
   lastMessageId?: string;
   lastMessageContent?: string;
+  lastMessageSenderId?: string; // ID of the sender of the last message
   lastMessageAt?: string;
   unreadCount?: number;
   updatedAt?: string;

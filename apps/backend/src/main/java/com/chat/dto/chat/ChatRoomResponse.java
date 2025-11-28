@@ -14,6 +14,9 @@ public class ChatRoomResponse {
     private List<UUID> participants;
     private Long unreadCount;
     private LocalDateTime updatedAt;
+    private String lastMessageContent;
+    private UUID lastMessageSenderId;
+    private UUID lastMessageId;
 
     public UUID getId() {
         return id;
@@ -69,6 +72,30 @@ public class ChatRoomResponse {
 
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public String getLastMessageContent() {
+        return lastMessageContent;
+    }
+
+    public void setLastMessageContent(String lastMessageContent) {
+        this.lastMessageContent = lastMessageContent;
+    }
+
+    public UUID getLastMessageSenderId() {
+        return lastMessageSenderId;
+    }
+
+    public void setLastMessageSenderId(UUID lastMessageSenderId) {
+        this.lastMessageSenderId = lastMessageSenderId;
+    }
+
+    public UUID getLastMessageId() {
+        return lastMessageId;
+    }
+
+    public void setLastMessageId(UUID lastMessageId) {
+        this.lastMessageId = lastMessageId;
     }
 }
 

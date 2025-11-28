@@ -58,10 +58,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             localStorage.setItem('token', accessToken);
             localStorage.setItem('user', JSON.stringify(user));
             setUser(user);
+            await updateRemoteStatus(UserStatus.ONLINE);
             toast.success('Welcome back!');
         } catch (error: any) {
             console.error('Login failed', error);
-            toast.error(error.response?.data?.message || 'Login failed');
+            const errorMessage = error.response?.data?.message || error.message || 'Login failed';
+            
+            // Show specific error messages
+            if (errorMessage.includes('Account does not exist') || errorMessage.includes('not found')) {
+                toast.error('Account does not exist. Please check your username.');
+            } else if (errorMessage.includes('Incorrect password') || errorMessage.includes('Bad credentials')) {
+                toast.error('Incorrect password. Please try again.');
+            } else if (errorMessage.includes('inactive')) {
+                toast.error('Your account is inactive. Please contact support.');
+            } else {
+                toast.error(errorMessage);
+            }
             throw error;
         }
     };
@@ -69,10 +81,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const register = async (data: RegisterRequest) => {
         try {
             await client.post('/auth/register', data);
-            toast.success('Registration successful! Please login.');
+            toast.success('Registration successful! Please check your email for OTP code.');
         } catch (error: any) {
             console.error('Registration failed', error);
-            toast.error(error.response?.data?.message || 'Registration failed');
+            const errorMessage = error.response?.data?.message || error.message || 'Registration failed';
+            
+            // Show specific error messages
+            if (errorMessage.includes('username') && errorMessage.includes('already')) {
+                toast.error('Username already exists. Please choose another.');
+            } else if (errorMessage.includes('email') && errorMessage.includes('already')) {
+                toast.error('Email already registered. Please use another email or login.');
+            } else {
+                toast.error(errorMessage);
+            }
             throw error;
         }
     };
