@@ -1,5 +1,6 @@
 package com.chat.controller;
 
+import com.chat.dto.friend.PendingFriendRequestDTO;
 import com.chat.model.Friendship;
 import com.chat.model.User;
 import com.chat.security.UserPrincipal;
@@ -49,13 +50,21 @@ public class FriendshipController {
 
     @GetMapping
     public ResponseEntity<List<User>> getFriends(@AuthenticationPrincipal UserPrincipal currentUser) {
-        List<User> friends = friendshipService.getFriends(currentUser.getId());
-        return ResponseEntity.ok(friends);
+        System.out.println("Getting friends for user: " + currentUser.getId());
+        try {
+            List<User> friends = friendshipService.getFriends(currentUser.getId());
+            return ResponseEntity.ok(friends);
+        } catch (Exception e) {
+            System.out.println("Error getting friends for user: " + currentUser.getId());
+            e.printStackTrace();
+            throw e;
+        }
     }
 
     @GetMapping("/requests")
-    public ResponseEntity<List<Friendship>> getPendingRequests(@AuthenticationPrincipal UserPrincipal currentUser) {
-        List<Friendship> requests = friendshipService.getPendingRequests(currentUser.getId());
+    public ResponseEntity<List<PendingFriendRequestDTO>> getPendingRequests(
+            @AuthenticationPrincipal UserPrincipal currentUser) {
+        List<PendingFriendRequestDTO> requests = friendshipService.getPendingRequests(currentUser.getId());
         return ResponseEntity.ok(requests);
     }
 

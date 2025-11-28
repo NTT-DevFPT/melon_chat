@@ -1,30 +1,41 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageSquare, Phone, Users, Settings, Search, Plus, UserPlus, Check, X, User as UserIcon } from 'lucide-react';
-import { Conversation, User, UserStatus } from '../types';
+import { Users, Settings, Search, Plus, UserPlus, Check, X } from 'lucide-react';
+import { Conversation, User, UserStatus, PendingFriendRequest } from '../types';
 import { Avatar } from './Avatar';
-import { client } from '../api/client';
+import { client } from '@/src/api/client';
 import { toast } from 'react-hot-toast';
 
 interface SidebarProps {
     conversations: Conversation[];
     users: Record<string, User>;
+    friends: User[];
+    pendingRequests: PendingFriendRequest[];
     currentUserId: string;
     activeConversationId: string | null;
     onSelectConversation: (id: string) => void;
     onCreateGroup: (name: string, participantIds: string[]) => void;
     onOpenSettings: () => void;
+    onOpenFriendChat: (userId: string) => void;
+    onAcceptFriendRequest: (friendshipId: string) => void;
+    onRejectFriendRequest: (friendshipId: string) => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
     conversations,
     users,
+    friends,
+    pendingRequests,
     currentUserId,
     activeConversationId,
     onSelectConversation,
     onCreateGroup,
-    onOpenSettings
+    onOpenSettings,
+    onOpenFriendChat,
+    onAcceptFriendRequest,
+    onRejectFriendRequest
 }) => {
     const [isMenuOpen, setIsMenuOpen] = useState(false);
+    const [activeTab, setActiveTab] = useState<'chats' | 'friends' | 'requests'>('chats');
 
     // Group Modal State
     const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
@@ -40,21 +51,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
     const menuRef = useRef<HTMLDivElement>(null);
 
+    const getParticipantIds = (conv: Conversation) => Array.isArray(conv.participants) ? conv.participants : [];
+
     const getConversationName = (conv: Conversation) => {
-        if (conv.type === 'GROUP') return conv.name;
-        const otherUserId = conv.participants.find(id => id !== currentUserId);
-        return otherUserId ? users[otherUserId]?.fullName : 'Unknown User';
+        if (conv.type === 'GROUP') return conv.name || 'Group';
+        const otherUserId = getParticipantIds(conv).find(id => id !== currentUserId);
+        return otherUserId ? users[otherUserId]?.fullName || users[otherUserId]?.username : 'Unknown User';
     };
 
     const getConversationAvatar = (conv: Conversation) => {
         if (conv.type === 'GROUP') return conv.avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(conv.name || 'G')}&background=FF6B9D&color=fff`;
-        const otherUserId = conv.participants.find(id => id !== currentUserId);
+        const otherUserId = getParticipantIds(conv).find(id => id !== currentUserId);
         return otherUserId ? users[otherUserId]?.avatarUrl : `https://ui-avatars.com/api/?name=${encodeURIComponent(users[otherUserId || '']?.fullName || 'U')}&background=random`;
     };
 
     const getOtherUserStatus = (conv: Conversation) => {
         if (conv.type === 'GROUP') return undefined;
-        const otherUserId = conv.participants.find(id => id !== currentUserId);
+        const otherUserId = getParticipantIds(conv).find(id => id !== currentUserId);
         return otherUserId ? users[otherUserId]?.status : UserStatus.OFFLINE;
     };
 
@@ -79,7 +92,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         const delayDebounceFn = setTimeout(async () => {
             setIsSearching(true);
             try {
-                const response = await client.get<User[]>(`/users/search?query=${friendSearchQuery}`);
+                const response = await client.get<User[]>(`/users/search?q=${encodeURIComponent(friendSearchQuery)}`);
                 // Filter out current user from results
                 setSearchResults(response.data.filter(u => u.id !== currentUserId));
             } catch (error) {
@@ -184,14 +197,37 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
             {/* Nav Tabs */}
             <div className="flex px-4 space-x-1 mb-2">
-                <button className="flex-1 py-2 text-sm font-medium text-white border-b-2" style={{ borderColor: '#FF6B9D' }}>Chats</button>
-                <button className="flex-1 py-2 text-sm font-medium text-slate-500 hover:text-slate-300">Calls</button>
-                <button className="flex-1 py-2 text-sm font-medium text-slate-500 hover:text-slate-300">Contacts</button>
+                <button
+                    onClick={() => setActiveTab('chats')}
+                    className={`flex-1 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'chats' ? 'text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                    style={{ borderColor: activeTab === 'chats' ? '#FF6B9D' : 'transparent' }}
+                >
+                    Chats
+                </button>
+                <button
+                    onClick={() => setActiveTab('friends')}
+                    className={`flex-1 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'friends' ? 'text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                    style={{ borderColor: activeTab === 'friends' ? '#FF6B9D' : 'transparent' }}
+                >
+                    Friends
+                </button>
+                <button
+                    onClick={() => setActiveTab('requests')}
+                    className={`flex-1 py-2 text-sm font-medium border-b-2 transition-colors relative ${activeTab === 'requests' ? 'text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                    style={{ borderColor: activeTab === 'requests' ? '#FF6B9D' : 'transparent' }}
+                >
+                    Requests
+                    {pendingRequests.length > 0 && (
+                        <span className="absolute -top-1 -right-1 px-2 py-[1px] text-[10px] rounded-full bg-emerald-500 text-white">
+                            {pendingRequests.length}
+                        </span>
+                    )}
+                </button>
             </div>
 
-            {/* Conversation List */}
+            {/* Dynamic List */}
             <div className="flex-1 overflow-y-auto custom-scrollbar">
-                {conversations.map((conv) => {
+                {activeTab === 'chats' && conversations.map((conv) => {
                     const isActive = conv.id === activeConversationId;
                     return (
                         <div
@@ -210,13 +246,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             <div className="flex-1 min-w-0">
                                 <div className="flex justify-between items-baseline mb-1">
                                     <h3 className="text-sm font-semibold text-slate-100 truncate">{getConversationName(conv)}</h3>
-                                    <span className="text-xs text-slate-500">{new Date(conv.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                    <span className="text-xs text-slate-500">
+                                        {conv.updatedAt ? new Date(conv.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                                    </span>
                                 </div>
                                 <div className="flex justify-between items-center">
-                                    <p className="text-xs text-slate-400 truncate max-w-[140px]">
-                                        {conv.unreadCount > 0 ? <span className="font-bold text-slate-200">New message received</span> : "Click to view conversation"}
+                                    <p
+                                        className={`text-xs truncate max-w-[140px] ${conv.unreadCount && conv.unreadCount > 0 ? 'text-slate-100 font-semibold' : 'text-slate-400'}`}
+                                    >
+                                        {conv.lastMessageContent
+                                            ? conv.lastMessageContent
+                                            : conv.unreadCount && conv.unreadCount > 0
+                                                ? 'New message received'
+                                                : 'Click to view conversation'}
                                     </p>
-                                    {conv.unreadCount > 0 && (
+                                    {conv.unreadCount && conv.unreadCount > 0 && (
                                         <span className="flex items-center justify-center w-5 h-5 text-white text-[10px] font-bold rounded-full" style={{ backgroundColor: '#FF6B9D' }}>
                                             {conv.unreadCount}
                                         </span>
@@ -226,6 +270,74 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         </div>
                     );
                 })}
+
+                {activeTab === 'friends' && (
+                    friends.length === 0 ? (
+                        <div className="px-4 py-6 text-center text-sm text-slate-500">
+                            No friends yet. Use "Add Friend" to get started.
+                        </div>
+                    ) : (
+                        friends.map(friend => (
+                            <button
+                                key={friend.id}
+                                onClick={() => onOpenFriendChat(friend.id)}
+                                className="w-full text-left px-4 py-3 flex items-center gap-3 border-l-4 border-transparent hover:bg-slate-800/40 transition-colors rounded-xl"
+                            >
+                                <Avatar src={friend.avatarUrl} alt={friend.fullName} size="md" status={friend.status} />
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex items-center justify-between">
+                                        <h3 className="text-sm font-semibold text-slate-100 truncate">{friend.fullName}</h3>
+                                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${friend.status === UserStatus.ONLINE ? 'bg-emerald-500/10 text-emerald-300' : 'bg-slate-800 text-slate-400'}`}>
+                                            {friend.status === UserStatus.ONLINE ? 'Online' : 'Offline'}
+                                        </span>
+                                    </div>
+                                    <p className="text-xs text-slate-500">@{friend.username}</p>
+                                </div>
+                            </button>
+                        ))
+                    )
+                )}
+
+                {activeTab === 'requests' && (
+                    pendingRequests.length === 0 ? (
+                        <div className="px-4 py-6 text-center text-sm text-slate-500">
+                            No pending requests right now.
+                        </div>
+                    ) : (
+                        pendingRequests.map(request => (
+                            <div key={request.id} className="px-4 py-3 flex items-center gap-3 border border-slate-800 bg-slate-900/40 rounded-xl mx-4 mb-3">
+                                <Avatar
+                                    src={request.requesterAvatarUrl || undefined}
+                                    alt={request.requesterName || 'Friend request'}
+                                    size="md"
+                                />
+                                <div className="flex-1 min-w-0">
+                                    <h3 className="text-sm font-semibold text-slate-100 truncate">{request.requesterName || 'Unknown user'}</h3>
+                                    <p className="text-xs text-slate-500">@{request.requesterUsername || 'unknown'}</p>
+                                    <p className="text-[10px] text-slate-500 mt-1">
+                                        Sent {new Date(request.createdAt).toLocaleString()}
+                                    </p>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => onAcceptFriendRequest(request.id)}
+                                        className="p-2 rounded-lg bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 transition-colors"
+                                        title="Accept"
+                                    >
+                                        <Check size={16} />
+                                    </button>
+                                    <button
+                                        onClick={() => onRejectFriendRequest(request.id)}
+                                        className="p-2 rounded-lg bg-rose-500/20 text-rose-300 hover:bg-rose-500/30 transition-colors"
+                                        title="Reject"
+                                    >
+                                        <X size={16} />
+                                    </button>
+                                </div>
+                            </div>
+                        ))
+                    )
+                )}
             </div>
 
             {/* User Profile Mini */}

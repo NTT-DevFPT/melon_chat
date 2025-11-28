@@ -1,7 +1,6 @@
 server:
   port: 8080
-  servlet:
-    context-path: /api
+
 
 spring:
   application:
@@ -42,7 +41,7 @@ spring:
           writetimeout: 5000
  
 app:
-  jwtSecret: ${JWT_SECRET:/B1n5iULIRV0tJ7A+QVo5RAJw4aGxETNrFfWEamJys4=}
+  jwtSecret: ${JWT_SECRET:5367566B59703373367639792F423F4528482B4D6251655468576D5A71347437404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}
   jwtExpirationInMs: 3600000
   jwtRefreshExpirationInMs: 604800000
 

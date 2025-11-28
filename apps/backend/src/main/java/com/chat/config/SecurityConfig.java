@@ -16,6 +16,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -57,20 +58,21 @@ public class SecurityConfig {
                 .exceptionHandling(exception -> exception.authenticationEntryPoint(unauthorizedHandler))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/",
-                                "/favicon.ico",
-                                "/**/*.png",
-                                "/**/*.gif",
-                                "/**/*.svg",
-                                "/**/*.jpg",
-                                "/**/*.html",
-                                "/**/*.css",
-                                "/**/*.js")
+                        .requestMatchers(new AntPathRequestMatcher("/"),
+                                new AntPathRequestMatcher("/favicon.ico"),
+                                new AntPathRequestMatcher("/**/*.png"),
+                                new AntPathRequestMatcher("/**/*.gif"),
+                                new AntPathRequestMatcher("/**/*.svg"),
+                                new AntPathRequestMatcher("/**/*.jpg"),
+                                new AntPathRequestMatcher("/**/*.html"),
+                                new AntPathRequestMatcher("/**/*.css"),
+                                new AntPathRequestMatcher("/**/*.js"))
                         .permitAll()
-                        .requestMatchers("/api/auth/**").permitAll()
-                        .requestMatchers("/api/user/checkUsernameAvailability", "/api/user/checkEmailAvailability")
+                        .requestMatchers(new AntPathRequestMatcher("/api/auth/**")).permitAll()
+                        .requestMatchers(new AntPathRequestMatcher("/api/user/checkUsernameAvailability"),
+                                new AntPathRequestMatcher("/api/user/checkEmailAvailability"))
                         .permitAll()
-                        .requestMatchers("/ws/**").permitAll() // Allow WebSocket handshake
+                        .requestMatchers(new AntPathRequestMatcher("/ws/**")).permitAll() // Allow WebSocket handshake
                         .anyRequest().authenticated());
 
         // Add our custom JWT security filter

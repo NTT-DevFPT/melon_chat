@@ -1,14 +1,14 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Sidebar } from '../components/Sidebar';
 import { MessageBubble } from '../components/MessageBubble';
 import { VideoCall } from '../components/VideoCall';
 import { SettingsModal } from '../components/SettingsModal';
 import { Phone, Video, MoreVertical, Paperclip, Smile, Send, Image as ImageIcon } from 'lucide-react';
-import { Conversation, User, Message, UserStatus, ConversationType, MessageType } from '../types';
+import { Conversation, User, Message, UserStatus, ConversationType, MessageType, PendingFriendRequest } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { client } from '../api/client';
+import { client } from '@/src/api/client';
 import { toast } from 'react-hot-toast';
-import { webSocketService } from '../services/WebSocketService';
+import { webSocketService } from '@/src/services/WebSocketService';
 
 const EMOJIS = ["🍉", "😀", "😂", "🤣", "❤️", "😍", "😒", "👌", "😭", "😩", "🫣", "🫡", "🫠", "💀", "🤡", "🤖", "👻", "👽", "💩", "👍", "👎", "🔥", "🎉", "👋", "🙏"];
 
@@ -21,6 +21,8 @@ export const ChatPage: React.FC = () => {
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [showEmojiPicker, setShowEmojiPicker] = useState(false);
     const [users, setUsers] = useState<Record<string, User>>({});
+    const [friends, setFriends] = useState<User[]>([]);
+    const [pendingRequests, setPendingRequests] = useState<PendingFriendRequest[]>([]);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -56,10 +58,15 @@ export const ChatPage: React.FC = () => {
                 setConversations(prev => {
                     const index = prev.findIndex(c => c.id === message.conversationId);
                     if (index !== -1) {
-                        const updatedConv = {
-                            ...prev[index],
+                        const current = prev[index];
+                        const unreadBase = current.unreadCount ?? 0;
+                        const updatedConv: Conversation = {
+                            ...current,
                             updatedAt: message.createdAt,
-                            unreadCount: activeConvIdRef.current === message.conversationId ? prev[index].unreadCount : prev[index].unreadCount + 1
+                            lastMessageId: message.id,
+                            lastMessageContent: message.content,
+                            lastMessageAt: message.createdAt,
+                            unreadCount: activeConvIdRef.current === message.conversationId ? unreadBase : unreadBase + 1
                         };
                         const newConvs = [...prev];
                         newConvs.splice(index, 1);
@@ -77,55 +84,119 @@ export const ChatPage: React.FC = () => {
         };
     }, [currentUser]);
 
+    const loadConversations = useCallback(async () => {
+        try {
+            const response = await client.get<Conversation[]>('/chats');
+            setConversations(response.data);
+            setActiveConvId(prev => prev ?? (response.data[0]?.id ?? null));
+            return response.data;
+        } catch (error) {
+            console.error("Failed to fetch conversations", error);
+            return [];
+        }
+    }, []);
+
     // Fetch conversations (Initial only)
     useEffect(() => {
-        const fetchConversations = async () => {
-            try {
-                const response = await client.get<Conversation[]>('/chat/rooms');
-                setConversations(response.data);
-                if (response.data.length > 0 && !activeConvId) {
-                    setActiveConvId(response.data[0].id);
-                }
-            } catch (error) {
-                console.error("Failed to fetch conversations", error);
-            }
-        };
-        fetchConversations();
+        loadConversations();
+    }, [loadConversations]);
+
+    const normalizeMessages = (payload: { content?: Message[] } | Message[]) => {
+        if (Array.isArray(payload)) return payload;
+        return payload?.content ?? [];
+    };
+
+    const MESSAGE_POLL_INTERVAL_MS = 1200;
+
+    const fetchMessages = useCallback(async (conversationId: string) => {
+        try {
+            const response = await client.get<{ content?: Message[] } | Message[]>(`/chats/${conversationId}/messages`);
+            setMessages([...normalizeMessages(response.data)].reverse());
+        } catch (error) {
+            console.error("Failed to fetch messages", error);
+        }
     }, []);
+
+    const fetchRecentMessages = useCallback(async (conversationId: string) => {
+        try {
+            const last = messages[messages.length - 1];
+            if (!last) {
+                await fetchMessages(conversationId);
+                return;
+            }
+            const response = await client.get<Message[]>(`/chats/${conversationId}/messages/recent`, {
+                params: { since: last.createdAt }
+            });
+            if (response.data.length) {
+                setMessages(prev => [...prev, ...response.data]);
+            }
+        } catch (error) {
+            console.error("Failed to fetch recent messages", error);
+        }
+    }, [messages, fetchMessages]);
 
     // Fetch messages for active conversation
     useEffect(() => {
         if (!activeConvId) return;
+        fetchMessages(activeConvId);
+    }, [activeConvId, fetchMessages]);
 
-        const fetchMessages = async () => {
-            try {
-                const response = await client.get<{ content: Message[] }>(`/chat/rooms/${activeConvId}/messages`);
-                // Backend returns Page<Message>, so we access .content
-                // We might need to reverse if backend returns newest first
-                setMessages(response.data.content.reverse());
-            } catch (error) {
-                console.error("Failed to fetch messages", error);
-            }
-        };
-
-        fetchMessages();
-    }, [activeConvId]);
-
-    // Fetch participants info (simple version: fetch friends)
+    // Poll only recent messages to keep near-realtime with minimal payload
     useEffect(() => {
-        const fetchUsers = async () => {
-            try {
-                const response = await client.get<User[]>('/friendships/friends');
-                const newUsers: Record<string, User> = {};
-                response.data.forEach(u => newUsers[u.id] = u);
-                if (currentUser) newUsers[currentUser.id] = currentUser;
-                setUsers(newUsers);
-            } catch (error) {
-                console.error("Failed to fetch users", error);
+        if (!activeConvId) return;
+        const interval = setInterval(() => fetchRecentMessages(activeConvId), MESSAGE_POLL_INTERVAL_MS);
+        return () => clearInterval(interval);
+    }, [activeConvId, fetchRecentMessages]);
+
+    const loadFriends = useCallback(async () => {
+        if (!currentUser) return;
+        try {
+            const response = await client.get<User[]>('/friendships');
+            const newUsers: Record<string, User> = {};
+            response.data.forEach(u => newUsers[u.id] = u);
+            newUsers[currentUser.id] = currentUser;
+            setUsers(newUsers);
+            setFriends(response.data);
+        } catch (error) {
+            console.error("Failed to fetch users", error);
+        }
+    }, [currentUser]);
+
+    const loadPendingRequests = useCallback(async () => {
+        if (!currentUser) return;
+        try {
+            const response = await client.get<PendingFriendRequest[]>('/friendships/requests');
+            setPendingRequests(response.data);
+        } catch (error) {
+            console.error("Failed to fetch pending requests", error);
+        }
+    }, [currentUser]);
+
+    useEffect(() => {
+        loadFriends();
+    }, [loadFriends]);
+
+    useEffect(() => {
+        loadPendingRequests();
+    }, [loadPendingRequests]);
+
+    // Presence polling
+    useEffect(() => {
+        const interval = setInterval(() => {
+            loadFriends();
+        }, 15000);
+        return () => clearInterval(interval);
+    }, [loadFriends]);
+
+    useEffect(() => {
+        const handleVisibility = () => {
+            if (document.visibilityState === 'visible') {
+                loadFriends();
             }
         };
-        fetchUsers();
-    }, [currentUser]);
+        document.addEventListener('visibilitychange', handleVisibility);
+        return () => document.removeEventListener('visibilitychange', handleVisibility);
+    }, [loadFriends]);
 
     // Scroll to bottom on new message
     const scrollToBottom = () => {
@@ -151,7 +222,7 @@ export const ChatPage: React.FC = () => {
         if (!inputValue.trim() || !activeConvId) return;
 
         try {
-            await client.post(`/chat/rooms/${activeConvId}/messages`, {
+            const response = await client.post<Message>(`/chats/${activeConvId}/messages`, {
                 content: inputValue,
                 type: MessageType.TEXT
             });
@@ -163,8 +234,22 @@ export const ChatPage: React.FC = () => {
             // For now, let's just fetch messages to be sure, or rely on WS.
             // Actually, if we rely on WS, we don't need to fetch.
             // But let's fetch just in case WS is slow or disconnected.
-            const response = await client.get<{ content: Message[] }>(`/chat/rooms/${activeConvId}/messages`);
-            setMessages(response.data.content.reverse());
+            if (response.data) {
+                setMessages(prev => [...prev, response.data]);
+                setConversations(prev => prev.map(conv =>
+                    conv.id === activeConvId
+                        ? {
+                            ...conv,
+                            updatedAt: response.data.createdAt,
+                            lastMessageId: response.data.id,
+                            lastMessageContent: response.data.content,
+                            lastMessageAt: response.data.createdAt
+                        }
+                        : conv
+                ));
+            } else {
+                await fetchMessages(activeConvId);
+            }
         } catch (error) {
             console.error("Failed to send message", error);
             toast.error("Failed to send message");
@@ -184,17 +269,72 @@ export const ChatPage: React.FC = () => {
 
     const handleCreateGroup = async (name: string, participantIds: string[]) => {
         try {
-            await client.post('/chat/group', {
+            await client.post('/chats/group', {
                 name,
                 participantIds
             });
             toast.success("Group created!");
-            // Refresh conversations
-            const response = await client.get<Conversation[]>('/chat/rooms');
-            setConversations(response.data);
+            await loadConversations();
         } catch (error) {
             console.error("Failed to create group", error);
             toast.error("Failed to create group");
+        }
+    };
+
+    const findDirectConversation = (list: Conversation[], friendId: string) =>
+        list.find(conv =>
+            conv.type === ConversationType.DIRECT &&
+            Array.isArray(conv.participants) &&
+            conv.participants.includes(friendId)
+        );
+
+    const handleOpenFriendConversation = async (friendId: string) => {
+        const existing = findDirectConversation(conversations, friendId);
+        if (existing) {
+            setActiveConvId(existing.id);
+            return;
+        }
+        try {
+            const response = await client.post<Conversation>(`/chats/direct/${friendId}`);
+            await loadConversations();
+            if (response.data?.id) {
+                setActiveConvId(response.data.id);
+                toast.success("New chat room created");
+            } else {
+                const updated = await loadConversations();
+                const created = findDirectConversation(updated, friendId);
+                if (created) {
+                    setActiveConvId(created.id);
+                    toast.success("New chat room created");
+                } else {
+                    toast.error("Chat created but not found, try refreshing.");
+                }
+            }
+        } catch (error) {
+            console.error("Failed to open chat", error);
+            toast.error("Cannot start chat with user");
+        }
+    };
+
+    const handleAcceptFriendRequest = async (friendshipId: string) => {
+        try {
+            await client.put(`/friendships/${friendshipId}/accept`);
+            toast.success("Friend request accepted");
+            await Promise.all([loadFriends(), loadPendingRequests()]);
+        } catch (error) {
+            console.error("Failed to accept friend request", error);
+            toast.error("Failed to accept request");
+        }
+    };
+
+    const handleRejectFriendRequest = async (friendshipId: string) => {
+        try {
+            await client.put(`/friendships/${friendshipId}/reject`);
+            toast.success("Friend request rejected");
+            await loadPendingRequests();
+        } catch (error) {
+            console.error("Failed to reject friend request", error);
+            toast.error("Failed to reject request");
         }
     };
 
@@ -205,13 +345,15 @@ export const ChatPage: React.FC = () => {
         if (!activeConv) return { title: 'Select Chat', subtitle: '', avatar: '' };
 
         if (activeConv.type === ConversationType.GROUP) {
+            const participantCount = Array.isArray(activeConv.participants) ? activeConv.participants.length : 0;
             return {
                 title: activeConv.name || 'Group Chat',
-                subtitle: `${activeConv.participants.length} participants`,
+                subtitle: `${participantCount} participants`,
                 avatar: activeConv.avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(activeConv.name || 'G')}&background=FF6B9D&color=fff`
             };
         } else {
-            const otherId = activeConv.participants.find(id => id !== currentUser?.id);
+            const participants = Array.isArray(activeConv.participants) ? activeConv.participants : [];
+            const otherId = participants.find(id => id !== currentUser?.id);
             // Try to find user in our map, otherwise fallback to unknown
             const user = users[otherId || ''];
             return {
@@ -236,147 +378,167 @@ export const ChatPage: React.FC = () => {
             <Sidebar
                 conversations={conversations}
                 users={users}
+                friends={friends}
+                pendingRequests={pendingRequests}
                 currentUserId={currentUser?.id || ''}
                 activeConversationId={activeConvId}
                 onSelectConversation={setActiveConvId}
                 onCreateGroup={handleCreateGroup}
                 onOpenSettings={() => setIsSettingsOpen(true)}
+                onOpenFriendChat={handleOpenFriendConversation}
+                onAcceptFriendRequest={handleAcceptFriendRequest}
+                onRejectFriendRequest={handleRejectFriendRequest}
             />
 
             {/* Main Chat Area */}
             <div className="flex-1 flex flex-col bg-slate-900 relative">
 
-                {/* Top Header */}
-                <div className="h-16 border-b border-slate-800 flex items-center justify-between px-6 bg-slate-900 z-10">
-                    <div className="flex items-center space-x-4">
-                        <div className="relative">
-                            <img src={headerInfo.avatar} alt={headerInfo.title} className="w-10 h-10 rounded-full object-cover" />
-                            {activeConv?.type === ConversationType.DIRECT && (
-                                <span className="absolute bottom-0 right-0 block h-2.5 w-2.5 rounded-full ring-2 ring-slate-900 bg-green-500" />
-                            )}
+                {!activeConvId ? (
+                    <div className="flex-1 flex flex-col items-center justify-center bg-slate-950 text-center p-8 z-10">
+                        <div className="w-32 h-32 bg-slate-900 rounded-full flex items-center justify-center mb-6 shadow-2xl border border-slate-800 relative overflow-hidden group">
+                            <div className="absolute inset-0 bg-gradient-to-br from-pink-500/10 to-emerald-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                            <img src="/logo.png" alt="Logo" className="w-20 h-20 relative z-10" />
                         </div>
-                        <div>
-                            <h2 className="text-slate-100 font-semibold">{headerInfo.title}</h2>
-                            <p className="text-xs text-slate-400">{headerInfo.subtitle}</p>
-                        </div>
+                        <h2 className="text-3xl font-bold text-white mb-3 tracking-tight">Welcome to Melon <span style={{ color: '#FF6B9D' }}>Chat</span> 🍉</h2>
+                        <p className="text-slate-400 max-w-md text-lg leading-relaxed">
+                            Select a conversation from the sidebar or start a new one to begin messaging.
+                        </p>
                     </div>
+                ) : (
+                    <>
+                        {/* Top Header */}
+                        <div className="h-16 border-b border-slate-800 flex items-center justify-between px-6 bg-slate-900 z-10">
+                            <div className="flex items-center space-x-4">
+                                <div className="relative">
+                                    <img src={headerInfo.avatar} alt={headerInfo.title} className="w-10 h-10 rounded-full object-cover" />
+                                    {activeConv?.type === ConversationType.DIRECT && (
+                                        <span className="absolute bottom-0 right-0 block h-2.5 w-2.5 rounded-full ring-2 ring-slate-900 bg-green-500" />
+                                    )}
+                                </div>
+                                <div>
+                                    <h2 className="text-slate-100 font-semibold">{headerInfo.title}</h2>
+                                    <p className="text-xs text-slate-400">{headerInfo.subtitle}</p>
+                                </div>
+                            </div>
 
-                    <div className="flex items-center space-x-4" style={{ color: '#FF6B9D' }}>
-                        <button
-                            className="p-2 hover:bg-slate-800 rounded-full transition-colors"
-                            onClick={() => setIsCallOpen(true)}
-                        >
-                            <Phone size={20} />
-                        </button>
-                        <button
-                            className="p-2 hover:bg-slate-800 rounded-full transition-colors"
-                            onClick={() => setIsCallOpen(true)}
-                        >
-                            <Video size={20} />
-                        </button>
-                        <button className="p-2 hover:bg-slate-800 rounded-full transition-colors text-slate-400" onClick={logout}>
-                            <MoreVertical size={20} />
-                        </button>
-                    </div>
-                </div>
-
-                {/* Messages List */}
-                <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-slate-900/50">
-                    <div className="flex justify-center mb-4">
-                        <span className="text-xs bg-slate-800 text-slate-400 px-3 py-1 rounded-full">Today</span>
-                    </div>
-
-                    {messages.map((msg, index) => {
-                        const isMe = msg.senderId === currentUser?.id;
-                        const showAvatar = !isMe && (index === 0 || messages[index - 1].senderId !== msg.senderId);
-                        return (
-                            <MessageBubble
-                                key={msg.id}
-                                message={msg}
-                                isMe={isMe}
-                                sender={users[msg.senderId]}
-                                showAvatar={showAvatar}
-                            />
-                        );
-                    })}
-                    <div ref={messagesEndRef} />
-                </div>
-
-                {/* Input Area */}
-                <div className="p-4 border-t border-slate-800 bg-slate-900 relative">
-                    {/* Emoji Picker Popover */}
-                    {showEmojiPicker && (
-                        <div
-                            ref={emojiPickerRef}
-                            className="absolute bottom-20 right-20 bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl p-4 w-72 animate-in slide-in-from-bottom-5 duration-200 z-50"
-                        >
-                            <div className="grid grid-cols-6 gap-2">
-                                {EMOJIS.map(emoji => (
-                                    <button
-                                        key={emoji}
-                                        onClick={() => handleAddEmoji(emoji)}
-                                        className="text-2xl hover:bg-slate-700 rounded-lg p-1 transition-colors"
-                                    >
-                                        {emoji}
-                                    </button>
-                                ))}
+                            <div className="flex items-center space-x-4" style={{ color: '#FF6B9D' }}>
+                                <button
+                                    className="p-2 hover:bg-slate-800 rounded-full transition-colors"
+                                    onClick={() => setIsCallOpen(true)}
+                                >
+                                    <Phone size={20} />
+                                </button>
+                                <button
+                                    className="p-2 hover:bg-slate-800 rounded-full transition-colors"
+                                    onClick={() => setIsCallOpen(true)}
+                                >
+                                    <Video size={20} />
+                                </button>
+                                <button className="p-2 hover:bg-slate-800 rounded-full transition-colors text-slate-400" onClick={logout}>
+                                    <MoreVertical size={20} />
+                                </button>
                             </div>
                         </div>
-                    )}
 
-                    <div className="bg-slate-800 rounded-2xl flex items-center px-4 py-2 shadow-inner">
-                        <input
-                            type="file"
-                            ref={fileInputRef}
-                            className="hidden"
-                            onChange={handleFileSelect}
-                        />
+                        {/* Messages List */}
+                        <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-slate-900/50">
+                            <div className="flex justify-center mb-4">
+                                <span className="text-xs bg-slate-800 text-slate-400 px-3 py-1 rounded-full">Today</span>
+                            </div>
 
-                        <button
-                            className="text-slate-400 p-2 transition-colors melon-button juice-splash"
-                            style={{ '--hover-color': '#FF6B9D' } as React.CSSProperties}
-                            onMouseEnter={(e) => e.currentTarget.style.color = '#FF6B9D'}
-                            onMouseLeave={(e) => e.currentTarget.style.color = '#94a3b8'}
-                            onClick={() => fileInputRef.current?.click()}
-                            title="Attach File"
-                        >
-                            <Paperclip size={20} />
-                        </button>
-                        <button
-                            className="text-slate-400 p-2 transition-colors melon-button juice-splash"
-                            onMouseEnter={(e) => e.currentTarget.style.color = '#FF6B9D'}
-                            onMouseLeave={(e) => e.currentTarget.style.color = '#94a3b8'}
-                            onClick={() => fileInputRef.current?.click()}
-                            title="Send Image"
-                        >
-                            <ImageIcon size={20} />
-                        </button>
-                        <input
-                            type="text"
-                            value={inputValue}
-                            onChange={(e) => setInputValue(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                            placeholder="Type your message..."
-                            className="flex-1 bg-transparent text-slate-200 px-4 py-2 focus:outline-none placeholder-slate-500"
-                        />
-                        <button
-                            className="text-slate-400 p-2 transition-colors melon-button"
-                            style={{ color: showEmojiPicker ? '#FF6B9D' : undefined }}
-                            onMouseEnter={(e) => !showEmojiPicker && (e.currentTarget.style.color = '#FF6B9D')}
-                            onMouseLeave={(e) => !showEmojiPicker && (e.currentTarget.style.color = '#94a3b8')}
-                            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                        >
-                            <Smile size={20} />
-                        </button>
-                        <button
-                            onClick={handleSendMessage}
-                            className={`p-2 rounded-xl ml-2 transition-all melon-button juice-splash ${inputValue.trim() ? 'text-white melon-glow' : 'bg-slate-700 text-slate-500'}`}
-                            style={{ backgroundColor: inputValue.trim() ? '#FF6B9D' : undefined }}
-                        >
-                            <Send size={18} />
-                        </button>
-                    </div>
-                </div>
+                            {messages.map((msg, index) => {
+                                const isMe = msg.senderId === currentUser?.id;
+                                const showAvatar = !isMe && (index === 0 || messages[index - 1].senderId !== msg.senderId);
+                                return (
+                                    <MessageBubble
+                                        key={msg.id}
+                                        message={msg}
+                                        isMe={isMe}
+                                        sender={users[msg.senderId]}
+                                        showAvatar={showAvatar}
+                                    />
+                                );
+                            })}
+                            <div ref={messagesEndRef} />
+                        </div>
+
+                        {/* Input Area */}
+                        <div className="p-4 border-t border-slate-800 bg-slate-900 relative">
+                            {/* Emoji Picker Popover */}
+                            {showEmojiPicker && (
+                                <div
+                                    ref={emojiPickerRef}
+                                    className="absolute bottom-20 right-20 bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl p-4 w-72 animate-in slide-in-from-bottom-5 duration-200 z-50"
+                                >
+                                    <div className="grid grid-cols-6 gap-2">
+                                        {EMOJIS.map(emoji => (
+                                            <button
+                                                key={emoji}
+                                                onClick={() => handleAddEmoji(emoji)}
+                                                className="text-2xl hover:bg-slate-700 rounded-lg p-1 transition-colors"
+                                            >
+                                                {emoji}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="bg-slate-800 rounded-2xl flex items-center px-4 py-2 shadow-inner">
+                                <input
+                                    type="file"
+                                    ref={fileInputRef}
+                                    className="hidden"
+                                    onChange={handleFileSelect}
+                                />
+
+                                <button
+                                    className="text-slate-400 p-2 transition-colors melon-button juice-splash"
+                                    style={{ '--hover-color': '#FF6B9D' } as React.CSSProperties}
+                                    onMouseEnter={(e) => e.currentTarget.style.color = '#FF6B9D'}
+                                    onMouseLeave={(e) => e.currentTarget.style.color = '#94a3b8'}
+                                    onClick={() => fileInputRef.current?.click()}
+                                    title="Attach File"
+                                >
+                                    <Paperclip size={20} />
+                                </button>
+                                <button
+                                    className="text-slate-400 p-2 transition-colors melon-button juice-splash"
+                                    onMouseEnter={(e) => e.currentTarget.style.color = '#FF6B9D'}
+                                    onMouseLeave={(e) => e.currentTarget.style.color = '#94a3b8'}
+                                    onClick={() => fileInputRef.current?.click()}
+                                    title="Send Image"
+                                >
+                                    <ImageIcon size={20} />
+                                </button>
+                                <input
+                                    type="text"
+                                    value={inputValue}
+                                    onChange={(e) => setInputValue(e.target.value)}
+                                    onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+                                    placeholder="Type your message..."
+                                    className="flex-1 bg-transparent text-slate-200 px-4 py-2 focus:outline-none placeholder-slate-500"
+                                />
+                                <button
+                                    className="text-slate-400 p-2 transition-colors melon-button"
+                                    style={{ color: showEmojiPicker ? '#FF6B9D' : undefined }}
+                                    onMouseEnter={(e) => !showEmojiPicker && (e.currentTarget.style.color = '#FF6B9D')}
+                                    onMouseLeave={(e) => !showEmojiPicker && (e.currentTarget.style.color = '#94a3b8')}
+                                    onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                                >
+                                    <Smile size={20} />
+                                </button>
+                                <button
+                                    onClick={handleSendMessage}
+                                    className={`p-2 rounded-xl ml-2 transition-all melon-button juice-splash ${inputValue.trim() ? 'text-white melon-glow' : 'bg-slate-700 text-slate-500'}`}
+                                    style={{ backgroundColor: inputValue.trim() ? '#FF6B9D' : undefined }}
+                                >
+                                    <Send size={18} />
+                                </button>
+                            </div>
+                        </div>
+                    </>
+                )}
 
                 {/* Video Call Overlay */}
                 <VideoCall
@@ -392,37 +554,24 @@ export const ChatPage: React.FC = () => {
             <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
 
             {/* Optional Right Sidebar (Details) - Hidden on small screens */}
-            <div className="hidden lg:block w-72 border-l border-slate-800 bg-slate-900 p-6">
-                <div className="flex flex-col items-center">
-                    <img src={headerInfo.avatar} className="w-24 h-24 rounded-full object-cover mb-4 border-4 border-slate-800 shadow-lg" alt="Profile" />
-                    <h3 className="text-lg font-bold text-slate-100">{headerInfo.title}</h3>
-                    <p className="text-sm text-slate-400">{headerInfo.subtitle}</p>
-                </div>
+            {activeConvId && (
+                <div className="hidden lg:block w-72 border-l border-slate-800 bg-slate-900 p-6">
+                    <div className="flex flex-col items-center">
+                        <img src={headerInfo.avatar} className="w-24 h-24 rounded-full object-cover mb-4 border-4 border-slate-800 shadow-lg" alt="Profile" />
+                        <h3 className="text-lg font-bold text-slate-100">{headerInfo.title}</h3>
+                        <p className="text-sm text-slate-400">{headerInfo.subtitle}</p>
+                    </div>
 
-                <div className="mt-8">
-                    <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4">Shared Media</h4>
-                    <div className="grid grid-cols-3 gap-2">
-                        <div className="aspect-square bg-slate-800 rounded-lg overflow-hidden">
-                            <img src="https://picsum.photos/id/23/200" className="w-full h-full object-cover opacity-80 hover:opacity-100 transition-opacity cursor-pointer" alt="media" />
-                        </div>
-                        <div className="aspect-square bg-slate-800 rounded-lg overflow-hidden">
-                            <img src="https://picsum.photos/id/45/200" className="w-full h-full object-cover opacity-80 hover:opacity-100 transition-opacity cursor-pointer" alt="media" />
-                        </div>
-                        <div className="aspect-square bg-slate-800 rounded-lg overflow-hidden flex items-center justify-center text-slate-500 text-xs font-medium cursor-pointer hover:bg-slate-700 transition-colors">
-                            +12
-                        </div>
+                    <div className="mt-8">
+                        <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4">Options</h4>
+                        <ul className="space-y-2">
+                            <li className="text-sm text-slate-300 hover:text-white cursor-pointer py-1">Search in Conversation</li>
+                            <li className="text-sm text-slate-300 hover:text-white cursor-pointer py-1">Notifications</li>
+                            <li className="text-sm text-red-400 hover:text-red-300 cursor-pointer py-1 mt-4">Block User</li>
+                        </ul>
                     </div>
                 </div>
-
-                <div className="mt-8">
-                    <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4">Options</h4>
-                    <ul className="space-y-2">
-                        <li className="text-sm text-slate-300 hover:text-white cursor-pointer py-1">Search in Conversation</li>
-                        <li className="text-sm text-slate-300 hover:text-white cursor-pointer py-1">Notifications</li>
-                        <li className="text-sm text-red-400 hover:text-red-300 cursor-pointer py-1 mt-4">Block User</li>
-                    </ul>
-                </div>
-            </div>
+            )}
         </div>
     );
 };

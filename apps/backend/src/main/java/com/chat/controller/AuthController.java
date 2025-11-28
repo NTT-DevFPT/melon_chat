@@ -5,6 +5,7 @@ import com.chat.exception.InvalidOTPException;
 import com.chat.exception.ResourceNotFoundException;
 import com.chat.model.User;
 import com.chat.model.enums.OTPType;
+import com.chat.model.enums.UserStatus;
 import com.chat.security.JwtTokenProvider;
 import com.chat.service.OTPService;
 import com.chat.service.UserService;
@@ -40,29 +41,39 @@ public class AuthController {
 
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> authenticateUser(@Valid @RequestBody LoginRequest loginRequest) {
-        Authentication authentication = authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(
-                        loginRequest.getUsernameOrEmail(),
-                        loginRequest.getPassword()));
+        System.out.println("Login request received for: " + loginRequest.getUsername());
+        try {
+            Authentication authentication = authenticationManager.authenticate(
+                    new UsernamePasswordAuthenticationToken(
+                            loginRequest.getUsername(),
+                            loginRequest.getPassword()));
 
-        SecurityContextHolder.getContext().setAuthentication(authentication);
+            System.out.println("Authentication successful for: " + loginRequest.getUsername());
+            SecurityContextHolder.getContext().setAuthentication(authentication);
 
-        String jwt = tokenProvider.generateToken(authentication);
-        String refreshToken = tokenProvider.generateRefreshToken(authentication);
+            String jwt = tokenProvider.generateToken(authentication);
+            String refreshToken = tokenProvider.generateRefreshToken(authentication);
 
-        // Get user details
-        User user = userService.getUserByUsername(authentication.getName()); // This might fail if login with email,
-                                                                             // need to handle
-        // Better way: CustomUserDetailsService returns UserPrincipal which has ID
-        // Let's get ID from authentication principal
-        // But we need the full User object for the response
+            // Get user details
+            User user = userService.getUserByUsername(authentication.getName()); // This might fail if login with email,
+                                                                                 // need to handle
+            // Better way: CustomUserDetailsService returns UserPrincipal which has ID
+            // Let's get ID from authentication principal
+            // But we need the full User object for the response
 
-        // Actually, authentication.getName() returns the username from UserDetails
-        // (UserPrincipal)
-        // UserPrincipal.getUsername() returns the username.
-        // So userService.getUserByUsername() should work.
+            // Actually, authentication.getName() returns the username from UserDetails
+            // (UserPrincipal)
+            // UserPrincipal.getUsername() returns the username.
+            // So userService.getUserByUsername() should work.
 
-        return ResponseEntity.ok(new AuthResponse(jwt, refreshToken, user));
+            User updatedUser = userService.updateUserStatus(user.getId(), UserStatus.ONLINE);
+
+            return ResponseEntity.ok(new AuthResponse(jwt, refreshToken, updatedUser));
+        } catch (Exception e) {
+            System.out.println("Login failed for: " + loginRequest.getUsername());
+            e.printStackTrace();
+            throw e;
+        }
     }
 
     @PostMapping("/register")

@@ -1,5 +1,6 @@
 package com.chat.controller;
 
+import com.chat.dto.chat.ChatRoomResponse;
 import com.chat.dto.chat.CreateGroupRequest;
 import com.chat.dto.chat.SendMessageRequest;
 import com.chat.model.ChatRoom;
@@ -29,22 +30,24 @@ public class ChatController {
     private MessageService messageService;
 
     @PostMapping("/direct/{userId}")
-    public ResponseEntity<ChatRoom> createDirectChat(@AuthenticationPrincipal UserPrincipal currentUser,
+    public ResponseEntity<ChatRoomResponse> createDirectChat(@AuthenticationPrincipal UserPrincipal currentUser,
             @PathVariable UUID userId) {
         ChatRoom room = chatRoomService.createDirectRoom(currentUser.getId(), userId);
-        return ResponseEntity.ok(room);
+        ChatRoomResponse response = chatRoomService.mapRoomToResponse(room);
+        return ResponseEntity.ok(response);
     }
 
     @PostMapping("/group")
-    public ResponseEntity<ChatRoom> createGroupChat(@AuthenticationPrincipal UserPrincipal currentUser,
+    public ResponseEntity<ChatRoomResponse> createGroupChat(@AuthenticationPrincipal UserPrincipal currentUser,
             @Valid @RequestBody CreateGroupRequest request) {
         ChatRoom room = chatRoomService.createGroupRoom(request.getName(), currentUser.getId(), request.getMemberIds());
-        return ResponseEntity.ok(room);
+        ChatRoomResponse response = chatRoomService.mapRoomToResponse(room);
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping
-    public ResponseEntity<List<ChatRoom>> getUserRooms(@AuthenticationPrincipal UserPrincipal currentUser) {
-        List<ChatRoom> rooms = chatRoomService.getUserRooms(currentUser.getId());
+    public ResponseEntity<List<ChatRoomResponse>> getUserRooms(@AuthenticationPrincipal UserPrincipal currentUser) {
+        List<ChatRoomResponse> rooms = chatRoomService.getUserRoomResponses(currentUser.getId());
         return ResponseEntity.ok(rooms);
     }
 

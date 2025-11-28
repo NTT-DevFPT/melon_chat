@@ -30,6 +30,13 @@ public class EmailService {
      * Send plain email
      */
     public void sendEmail(String to, String subject, String body) {
+        // If email username is not configured, just log the email
+        if (fromEmail == null || fromEmail.isEmpty() || fromEmail.contains("noreply@melonchat.com")) {
+            logger.info("Skipping email sending (no SMTP config). To: {}, Subject: {}", to, subject);
+            logger.info("Body: {}", body);
+            return;
+        }
+
         try {
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");

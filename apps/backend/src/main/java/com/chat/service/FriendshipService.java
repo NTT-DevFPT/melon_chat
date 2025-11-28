@@ -1,5 +1,6 @@
 package com.chat.service;
 
+import com.chat.dto.friend.PendingFriendRequestDTO;
 import com.chat.exception.BusinessException;
 import com.chat.exception.DuplicateResourceException;
 import com.chat.exception.ResourceNotFoundException;
@@ -16,8 +17,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Service for managing friendships
@@ -148,8 +151,12 @@ public class FriendshipService {
         List<User> friends = new ArrayList<>();
 
         for (Friendship f : friendships) {
-            UUID friendId = f.getOtherUser(userId);
-            userRepository.findById(friendId).ifPresent(friends::add);
+            try {
+                UUID friendId = f.getOtherUser(userId);
+                userRepository.findById(friendId).ifPresent(friends::add);
+            } catch (Exception e) {
+                logger.error("Error processing friendship {}: {}", f.getId(), e.getMessage());
+            }
         }
 
         return friends;
@@ -158,8 +165,31 @@ public class FriendshipService {
     /**
      * Get pending requests (received)
      */
-    public List<Friendship> getPendingRequests(UUID userId) {
-        return friendshipRepository.findPendingRequestsForUser(userId);
+    public List<PendingFriendRequestDTO> getPendingRequests(UUID userId) {
+        List<Friendship> pending = friendshipRepository.findPendingRequestsForUser(userId);
+        if (pending.isEmpty()) {
+            return List.of();
+        }
+
+        List<UUID> requesterIds = pending.stream()
+                .map(Friendship::getRequesterId)
+                .distinct()
+                .collect(Collectors.toList());
+
+        Map<UUID, User> requesterMap = userRepository.findAllById(requesterIds).stream()
+                .collect(Collectors.toMap(User::getId, user -> user));
+
+        return pending.stream()
+                .map(friendship -> {
+                    User requester = requesterMap.get(friendship.getRequesterId());
+                    if (requester == null) {
+                        logger.warn("Requester {} not found for friendship {}", friendship.getRequesterId(), friendship.getId());
+                        return null;
+                    }
+                    return new PendingFriendRequestDTO(friendship, requester);
+                })
+                .filter(dto -> dto != null)
+                .collect(Collectors.toList());
     }
 
     /**

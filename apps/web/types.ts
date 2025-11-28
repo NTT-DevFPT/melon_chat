@@ -18,6 +18,15 @@ export interface User {
   lastSeen: string; // ISO Date
 }
 
+export interface PendingFriendRequest {
+  id: string;
+  requesterId: string;
+  requesterName: string | null;
+  requesterUsername: string | null;
+  requesterAvatarUrl: string | null;
+  createdAt: string;
+}
+
 // --- Chat Service (MongoDB for History, Redis for Recent) ---
 export enum ConversationType {
   DIRECT = 'DIRECT',
@@ -35,10 +44,12 @@ export interface Conversation {
   type: ConversationType;
   name?: string; // For groups
   avatarUrl?: string; // For groups
-  participants: string[]; // Array of User IDs
+  participants?: string[]; // Array of User IDs, optional when backend omits
   lastMessageId?: string;
-  unreadCount: number;
-  updatedAt: string;
+  lastMessageContent?: string;
+  lastMessageAt?: string;
+  unreadCount?: number;
+  updatedAt?: string;
 }
 
 export enum MessageType {

@@ -1,5 +1,6 @@
 package com.chat.service;
 
+import com.chat.dto.chat.ChatRoomResponse;
 import com.chat.exception.BusinessException;
 import com.chat.exception.ResourceNotFoundException;
 import com.chat.exception.UnauthorizedException;
@@ -21,6 +22,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Service for managing chat rooms
@@ -113,6 +115,13 @@ public class ChatRoomService {
      */
     public List<ChatRoom> getUserRooms(UUID userId) {
         return chatRoomRepository.findUserChatRooms(userId);
+    }
+
+    public List<ChatRoomResponse> getUserRoomResponses(UUID userId) {
+        List<ChatRoom> rooms = chatRoomRepository.findUserChatRooms(userId);
+        return rooms.stream()
+                .map(this::mapRoomToResponse)
+                .collect(Collectors.toList());
     }
 
     /**
@@ -248,5 +257,20 @@ public class ChatRoomService {
         }
 
         return users;
+    }
+
+    public ChatRoomResponse mapRoomToResponse(ChatRoom room) {
+        ChatRoomResponse response = new ChatRoomResponse();
+        response.setId(room.getId());
+        response.setType(room.getType());
+        response.setName(room.getName());
+        response.setAvatarUrl(room.getAvatarUrl());
+        response.setUpdatedAt(room.getUpdatedAt());
+        response.setUnreadCount(0L);
+        List<UUID> participants = roomMemberRepository.findByRoomId(room.getId()).stream()
+                .map(RoomMember::getUserId)
+                .collect(Collectors.toList());
+        response.setParticipants(participants);
+        return response;
     }
 }

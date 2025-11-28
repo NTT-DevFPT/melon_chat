@@ -1,6 +1,6 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { client } from '../api/client';
-import { User, LoginRequest, RegisterRequest, AuthResponse } from '../types';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { client } from '@/src/api/client';
+import { User, LoginRequest, RegisterRequest, AuthResponse, UserStatus } from '../types';
 import { toast } from 'react-hot-toast';
 
 interface AuthContextType {
@@ -18,6 +18,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const [user, setUser] = useState<User | null>(null);
     const [isLoading, setIsLoading] = useState(true);
 
+    const updateRemoteStatus = useCallback(async (status: UserStatus) => {
+        try {
+            await client.put('/users/status', { status });
+            setUser(prev => (prev ? { ...prev, status } : prev));
+        } catch (error) {
+            console.error('Failed to update status', error);
+        }
+    }, []);
+
     useEffect(() => {
         const initAuth = async () => {
             const token = localStorage.getItem('token');
@@ -25,11 +34,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
             if (token && savedUser) {
                 setUser(JSON.parse(savedUser));
-                // Optionally verify token with backend here
                 try {
                     const response = await client.get<User>('/users/me');
                     setUser(response.data);
                     localStorage.setItem('user', JSON.stringify(response.data));
+                    await updateRemoteStatus(UserStatus.ONLINE);
                 } catch (error) {
                     console.error("Token verification failed", error);
                     logout();
@@ -39,7 +48,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
 
         initAuth();
-    }, []);
+    }, [updateRemoteStatus]);
 
     const login = async (data: LoginRequest) => {
         try {
@@ -69,10 +78,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     const logout = () => {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        setUser(null);
-        window.location.href = '/login';
+        const perform = async () => {
+            const token = localStorage.getItem('token');
+            if (token) {
+                await updateRemoteStatus(UserStatus.OFFLINE);
+            }
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
+            setUser(null);
+            window.location.href = '/login';
+        };
+        perform();
     };
 
     return (

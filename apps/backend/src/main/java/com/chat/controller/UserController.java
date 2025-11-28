@@ -1,5 +1,6 @@
 package com.chat.controller;
 
+import com.chat.dto.user.UpdateStatusRequest;
 import com.chat.dto.user.UpdateUserRequest;
 import com.chat.model.User;
 import com.chat.security.UserPrincipal;
@@ -38,9 +39,22 @@ public class UserController {
         return ResponseEntity.ok(updatedUser);
     }
 
+    @PutMapping("/status")
+    public ResponseEntity<User> updateStatus(@AuthenticationPrincipal UserPrincipal currentUser,
+            @Valid @RequestBody UpdateStatusRequest request) {
+        User updated = userService.updateUserStatus(currentUser.getId(), request.getStatus());
+        return ResponseEntity.ok(updated);
+    }
+
     @GetMapping("/search")
-    public ResponseEntity<List<User>> searchUsers(@RequestParam String q) {
-        List<User> users = userService.searchUsers(q);
+    public ResponseEntity<List<User>> searchUsers(
+            @RequestParam(name = "q", required = false) String q,
+            @RequestParam(name = "query", required = false) String query) {
+        String finalQuery = (q != null && !q.isBlank()) ? q : query;
+        if (finalQuery == null || finalQuery.isBlank()) {
+            return ResponseEntity.ok(List.of());
+        }
+        List<User> users = userService.searchUsers(finalQuery);
         return ResponseEntity.ok(users);
     }
 

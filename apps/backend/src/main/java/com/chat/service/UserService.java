@@ -58,6 +58,14 @@ public class UserService {
             user.setStatus(UserStatus.OFFLINE);
         }
 
+        // Set default avatar if not provided
+        if (user.getAvatarUrl() == null || user.getAvatarUrl().isEmpty()) {
+            String defaultAvatar = String.format(
+                    "https://ui-avatars.com/api/?name=%s&background=f0f0f0&color=999999&size=200",
+                    user.getFullName().replace(" ", "+"));
+            user.setAvatarUrl(defaultAvatar);
+        }
+
         User savedUser = userRepository.save(user);
         logger.info("Created new user: {}", savedUser.getUsername());
 
