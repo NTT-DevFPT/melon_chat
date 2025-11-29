@@ -78,7 +78,13 @@ export const LoginPage: React.FC = () => {
                                     <input type="checkbox" className="rounded border-slate-600 bg-transparent text-[#FF6B9D] focus:ring-[#FF6B9D]" />
                                     Remember me
                                 </label>
-                                <button type="button" className="text-[#FF6B9D] hover:text-white transition-colors">Forgot password?</button>
+                                <button
+                                    type="button"
+                                    onClick={() => navigate('/forgot-password')}
+                                    className="text-[#FF6B9D] hover:text-white transition-colors"
+                                >
+                                    Forgot password?
+                                </button>
                             </div>
 
                             <button
