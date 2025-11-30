@@ -72,4 +72,12 @@ public interface FriendshipRepository extends JpaRepository<Friendship, UUID> {
             "AND f.requesterId = :blockerId " +
             "AND f.status = 'BLOCKED'")
     boolean isUserBlockedBy(@Param("userId") UUID userId, @Param("blockerId") UUID blockerId);
+
+    /**
+     * Find all blocked users by a user (where user is the blocker)
+     */
+    @Query("SELECT f FROM Friendship f " +
+            "WHERE f.requesterId = :userId " +
+            "AND f.status = 'BLOCKED'")
+    List<Friendship> findBlockedUsers(@Param("userId") UUID userId);
 }

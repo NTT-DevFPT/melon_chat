@@ -3,7 +3,7 @@ import { Sidebar } from '../components/Sidebar';
 import { MessageBubble } from '../components/MessageBubble';
 import { VideoCall } from '../components/VideoCall';
 import { SettingsModal } from '../components/SettingsModal';
-import { Phone, Video, MoreVertical, Paperclip, Smile, Send, Image as ImageIcon } from 'lucide-react';
+import { Phone, Video, MoreVertical, Paperclip, Smile, Send, Image as ImageIcon, ChevronRight } from 'lucide-react';
 import { Conversation, User, Message, UserStatus, ConversationType, MessageType, PendingFriendRequest } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { client } from '@/src/api/client';
@@ -24,6 +24,12 @@ export const ChatPage: React.FC = () => {
     const [users, setUsers] = useState<Record<string, User>>({});
     const [friends, setFriends] = useState<User[]>([]);
     const [pendingRequests, setPendingRequests] = useState<PendingFriendRequest[]>([]);
+    const [blockedUsers, setBlockedUsers] = useState<User[]>([]);
+    const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['privacy'])); // Default expand privacy section
+    const [isBlockedByOther, setIsBlockedByOther] = useState<boolean>(false);
+    const [isCheckingBlocked, setIsCheckingBlocked] = useState<boolean>(false);
+    const [blockedStatusCache, setBlockedStatusCache] = useState<Record<string, boolean>>({});
+    const [isLoadingBlockedUsers, setIsLoadingBlockedUsers] = useState<boolean>(true);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -47,7 +53,7 @@ export const ChatPage: React.FC = () => {
         webSocketService.connect(token, () => {
             webSocketService.subscribe('/user/queue/messages', async (message: Message) => {
                 const isActive = activeConvIdRef.current === message.conversationId;
-                
+
                 // Handle new message
                 if (isActive) {
                     setMessages(prev => [...prev, message]);
@@ -95,6 +101,22 @@ export const ChatPage: React.FC = () => {
         };
     }, [currentUser]);
 
+    const loadBlockedUsers = useCallback(async () => {
+        if (!currentUser) {
+            setIsLoadingBlockedUsers(false);
+            return;
+        }
+        try {
+            setIsLoadingBlockedUsers(true);
+            const response = await client.get<User[]>('/friendships/blocked');
+            setBlockedUsers(response.data);
+        } catch (error) {
+            console.error("Failed to fetch blocked users", error);
+        } finally {
+            setIsLoadingBlockedUsers(false);
+        }
+    }, [currentUser]);
+
     const loadConversations = useCallback(async () => {
         try {
             const response = await client.get<Conversation[]>('/chats');
@@ -107,19 +129,84 @@ export const ChatPage: React.FC = () => {
                 }
                 return conv;
             });
-            setConversations(updated);
-            setActiveConvId(prev => prev ?? (updated[0]?.id ?? null));
-            return updated;
+
+            // Filter out conversations with users that current user has blocked (only for DIRECT conversations)
+            // User A blocks User B -> User A won't see conversation with User B
+            // ALWAYS filter based on current blockedUsers state to prevent flash
+            const blockedUserIds = new Set(blockedUsers.map(u => u.id));
+            const filtered = updated.filter(conv => {
+                if (conv.type === ConversationType.DIRECT) {
+                    const participants = Array.isArray(conv.participants) ? conv.participants : [];
+                    const otherId = participants.find(id => id !== currentUser?.id);
+                    if (!otherId) return true;
+
+                    // Always filter out blocked users, even on initial load
+                    // This prevents the flash of blocked conversations appearing then disappearing
+                    return !blockedUserIds.has(otherId);
+                }
+                return true; // Keep all GROUP conversations
+            });
+
+            setConversations(filtered);
+            setActiveConvId(prev => prev ?? (filtered[0]?.id ?? null));
+            return filtered;
         } catch (error) {
             console.error("Failed to fetch conversations", error);
             return [];
         }
-    }, [activeConvId]);
+    }, [activeConvId, blockedUsers, currentUser]);
 
-    // Fetch conversations (Initial + Auto-refresh)
+    // Load blocked users first, then conversations on initial load
     useEffect(() => {
-        loadConversations();
-    }, [loadConversations]);
+        const initData = async () => {
+            if (!currentUser) {
+                setIsLoadingBlockedUsers(false);
+                return;
+            }
+
+            // Load blocked users first
+            let loadedBlockedUsers: User[] = [];
+            try {
+                setIsLoadingBlockedUsers(true);
+                const blockedResponse = await client.get<User[]>('/friendships/blocked');
+                setBlockedUsers(blockedResponse.data);
+                loadedBlockedUsers = blockedResponse.data;
+            } catch (error) {
+                console.error("Failed to fetch blocked users", error);
+            } finally {
+                setIsLoadingBlockedUsers(false);
+            }
+
+            // Then load conversations (which will filter based on freshly loaded blocked users)
+            try {
+                const response = await client.get<Conversation[]>('/chats');
+                const updated = response.data.map(conv => {
+                    if (conv.id === activeConvId && activeConvId) {
+                        return { ...conv, unreadCount: 0 };
+                    }
+                    return conv;
+                });
+
+                const blockedUserIds = new Set(loadedBlockedUsers.map(u => u.id));
+                const filtered = updated.filter(conv => {
+                    if (conv.type === ConversationType.DIRECT) {
+                        const participants = Array.isArray(conv.participants) ? conv.participants : [];
+                        const otherId = participants.find(id => id !== currentUser?.id);
+                        if (!otherId) return true;
+                        return !blockedUserIds.has(otherId);
+                    }
+                    return true;
+                });
+
+                setConversations(filtered);
+                setActiveConvId(prev => prev ?? (filtered[0]?.id ?? null));
+            } catch (error) {
+                console.error("Failed to fetch conversations", error);
+            }
+        };
+        initData();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [currentUser?.id]); // Only depend on currentUser.id, not the whole object
 
     // Auto-refresh conversations periodically
     useEffect(() => {
@@ -188,7 +275,7 @@ export const ChatPage: React.FC = () => {
     useEffect(() => {
         if (!activeConvId) return;
         fetchMessages(activeConvId);
-        
+
         // Mark conversation as read when entering the room (call backend)
         const markAsRead = async () => {
             try {
@@ -201,10 +288,10 @@ export const ChatPage: React.FC = () => {
             }
         };
         markAsRead();
-        
+
         // Update UI immediately (optimistic update)
-        setConversations(prev => prev.map(conv => 
-            conv.id === activeConvId 
+        setConversations(prev => prev.map(conv =>
+            conv.id === activeConvId
                 ? { ...conv, unreadCount: 0 }
                 : conv
         ));
@@ -221,10 +308,12 @@ export const ChatPage: React.FC = () => {
         if (!currentUser) return;
         try {
             const response = await client.get<User[]>('/friendships');
-            const newUsers: Record<string, User> = {};
-            response.data.forEach(u => newUsers[u.id] = u);
-            newUsers[currentUser.id] = currentUser;
-            setUsers(newUsers);
+            setUsers(prev => {
+                const newUsers = { ...prev };
+                response.data.forEach(u => newUsers[u.id] = u);
+                if (currentUser) newUsers[currentUser.id] = currentUser;
+                return newUsers;
+            });
             setFriends(response.data);
         } catch (error) {
             console.error("Failed to fetch users", error);
@@ -249,6 +338,24 @@ export const ChatPage: React.FC = () => {
         loadPendingRequests();
     }, [loadPendingRequests]);
 
+    // Load blocked users periodically (initial load is handled in initData above)
+    // Note: This periodic refresh should NOT set isLoadingBlockedUsers to true
+    // because we want conversations to continue filtering correctly
+    useEffect(() => {
+        if (currentUser) {
+            const interval = setInterval(async () => {
+                // Refresh blocked users silently (don't set loading state to avoid flash)
+                try {
+                    const response = await client.get<User[]>('/friendships/blocked');
+                    setBlockedUsers(response.data);
+                } catch (error) {
+                    console.error("Failed to refresh blocked users", error);
+                }
+            }, 30000); // Refresh every 30 seconds
+            return () => clearInterval(interval);
+        }
+    }, [currentUser]);
+
     // Presence polling for friends
     useEffect(() => {
         const interval = setInterval(() => {
@@ -271,12 +378,13 @@ export const ChatPage: React.FC = () => {
             if (document.visibilityState === 'visible') {
                 loadFriends();
                 loadPendingRequests();
+                loadBlockedUsers();
                 loadConversations();
             }
         };
         document.addEventListener('visibilitychange', handleVisibility);
         return () => document.removeEventListener('visibilitychange', handleVisibility);
-    }, [loadFriends, loadPendingRequests, loadConversations]);
+    }, [loadFriends, loadPendingRequests, loadBlockedUsers, loadConversations]);
 
     // Scroll to bottom on new message
     const scrollToBottom = () => {
@@ -427,6 +535,89 @@ export const ChatPage: React.FC = () => {
 
     const activeConv = conversations.find(c => c.id === activeConvId);
 
+    // Calculate otherId outside useEffect to use as stable dependency
+    const participants = Array.isArray(activeConv?.participants) ? activeConv.participants : [];
+    const otherId = participants.find(id => id !== currentUser?.id);
+
+    // Reset blocked status when conversation changes
+    useEffect(() => {
+        setIsBlockedByOther(false);
+        setIsCheckingBlocked(true); // Default to checking to prevent flash of input area
+    }, [activeConvId]);
+
+    // Check if current user is blocked by the other user and load other user info
+    useEffect(() => {
+        const checkIfBlockedByOtherAndLoadUser = async () => {
+            if (!activeConvId || !activeConv || activeConv.type !== ConversationType.DIRECT || !currentUser || !otherId) {
+                setIsBlockedByOther(false);
+                setIsCheckingBlocked(false);
+                return;
+            }
+
+            // Check cache first - if we already know the blocked status for this conversation, use it
+            const cacheKey = `${activeConvId}-${otherId}`;
+            if (blockedStatusCache[cacheKey] !== undefined) {
+                setIsBlockedByOther(blockedStatusCache[cacheKey]);
+                setIsCheckingBlocked(false);
+                // Still load user info if not already loaded
+                if (!users[otherId]) {
+                    try {
+                        const userResponse = await client.get<User>(`/users/${otherId}`);
+                        setUsers(prev => ({
+                            ...prev,
+                            [otherId]: userResponse.data
+                        }));
+                    } catch (error) {
+                        console.error("Failed to load other user info", error);
+                    }
+                }
+                return;
+            }
+
+            // Set checking state to prevent showing input area prematurely
+            setIsCheckingBlocked(true);
+
+            try {
+                // Check if blocked by other user - do this first and in parallel with loading user info
+                const [blockedResponse, userResponse] = await Promise.all([
+                    client.get<boolean>(`/friendships/blocked-by/${otherId}`),
+                    // Load other user info even if blocked (so we can display their name and avatar)
+                    // This is important: User B should still see User A's info even if User A blocked User B
+                    users[otherId] ? Promise.resolve({ data: users[otherId] }) : client.get<User>(`/users/${otherId}`).catch(() => ({ data: null }))
+                ]);
+
+                const isBlocked = blockedResponse.data;
+                setIsBlockedByOther(isBlocked);
+
+                // Cache the blocked status for this conversation
+                setBlockedStatusCache(prev => ({
+                    ...prev,
+                    [cacheKey]: isBlocked
+                }));
+
+                // Update user info if loaded
+                if (userResponse.data && !users[otherId]) {
+                    setUsers(prev => ({
+                        ...prev,
+                        [otherId]: userResponse.data
+                    }));
+                }
+            } catch (error) {
+                console.error("Failed to check if blocked by other", error);
+                setIsBlockedByOther(false);
+                // Cache false if check fails
+                setBlockedStatusCache(prev => ({
+                    ...prev,
+                    [cacheKey]: false
+                }));
+            } finally {
+                setIsCheckingBlocked(false);
+            }
+        };
+
+        checkIfBlockedByOtherAndLoadUser();
+    }, [activeConvId, otherId, currentUser?.id]); // Only depend on stable IDs
+
     // Helper to get chat header info
     const getHeaderInfo = () => {
         if (!activeConv) return { title: 'Select Chat', subtitle: '', avatar: '' };
@@ -463,7 +654,7 @@ export const ChatPage: React.FC = () => {
             </div>
 
             <Sidebar
-                conversations={conversations}
+                conversations={isLoadingBlockedUsers ? [] : conversations}
                 users={users}
                 friends={friends}
                 pendingRequests={pendingRequests}
@@ -490,6 +681,11 @@ export const ChatPage: React.FC = () => {
                         <p className="text-slate-400 max-w-md text-lg leading-relaxed">
                             Select a conversation from the sidebar or start a new one to begin messaging.
                         </p>
+                    </div>
+                ) : (activeConv?.type === ConversationType.DIRECT && otherId && !users[otherId]) ? (
+                    <div className="flex-1 flex flex-col items-center justify-center bg-slate-900">
+                        <div className="w-10 h-10 border-4 border-slate-800 border-t-[#FF6B9D] rounded-full animate-spin"></div>
+                        <p className="text-slate-500 mt-4 text-sm animate-pulse">Loading chat info...</p>
                     </div>
                 ) : (
                     <>
@@ -534,7 +730,7 @@ export const ChatPage: React.FC = () => {
                         </div>
 
                         {/* Messages List */}
-                        <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-slate-900/50">
+                        <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-slate-900/50 relative">
                             <div className="flex justify-center mb-4">
                                 <span className="text-xs bg-slate-800 text-slate-400 px-3 py-1 rounded-full">Today</span>
                             </div>
@@ -549,87 +745,119 @@ export const ChatPage: React.FC = () => {
                                         isMe={isMe}
                                         sender={users[msg.senderId]}
                                         showAvatar={showAvatar}
+                                        onDelete={
+                                            isMe
+                                                ? async () => {
+                                                    try {
+                                                        await client.delete(`/chats/messages/${msg.id}`);
+                                                        setMessages(prev => prev.filter(m => m.id !== msg.id));
+                                                        // refresh conversations so last message / unreadCount stays in sync
+                                                        setTimeout(() => loadConversations(), 300);
+                                                        toast.success('Message deleted');
+                                                    } catch (error) {
+                                                        console.error('Failed to delete message', error);
+                                                        toast.error('Failed to delete message');
+                                                    }
+                                                }
+                                                : undefined
+                                        }
                                     />
                                 );
                             })}
                             <div ref={messagesEndRef} />
                         </div>
 
-                        {/* Input Area */}
-                        <div className="p-4 border-t border-slate-800 bg-slate-900 relative">
-                            {/* Emoji Picker Popover */}
-                            {showEmojiPicker && (
-                                <div
-                                    ref={emojiPickerRef}
-                                    className="absolute bottom-20 right-20 bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl p-4 w-72 animate-in slide-in-from-bottom-5 duration-200 z-50"
-                                >
-                                    <div className="grid grid-cols-6 gap-2">
-                                        {EMOJIS.map(emoji => (
-                                            <button
-                                                key={emoji}
-                                                onClick={() => handleAddEmoji(emoji)}
-                                                className="text-2xl hover:bg-slate-700 rounded-lg p-1 transition-colors"
-                                            >
-                                                {emoji}
-                                            </button>
-                                        ))}
+                        {/* Input Area - Hidden when blocked by other user or while checking */}
+                        {!isBlockedByOther && !isCheckingBlocked && (
+                            <div className="px-6 py-4 border-t border-slate-800 bg-slate-900 relative m-0">
+                                {/* Emoji Picker Popover */}
+                                {showEmojiPicker && (
+                                    <div
+                                        ref={emojiPickerRef}
+                                        className="absolute bottom-20 right-20 bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl p-4 w-72 animate-in slide-in-from-bottom-5 duration-200 z-50"
+                                    >
+                                        <div className="grid grid-cols-6 gap-2">
+                                            {EMOJIS.map(emoji => (
+                                                <button
+                                                    key={emoji}
+                                                    onClick={() => handleAddEmoji(emoji)}
+                                                    className="text-2xl hover:bg-slate-700 rounded-lg p-1 transition-colors"
+                                                >
+                                                    {emoji}
+                                                </button>
+                                            ))}
+                                        </div>
                                     </div>
+                                )}
+
+                                <div className="bg-slate-800 rounded-2xl flex items-center px-4 py-2 shadow-inner">
+                                    <input
+                                        type="file"
+                                        ref={fileInputRef}
+                                        className="hidden"
+                                        onChange={handleFileSelect}
+                                    />
+
+                                    <button
+                                        className="text-slate-400 p-2 transition-colors melon-button juice-splash"
+                                        style={{ '--hover-color': '#FF6B9D' } as React.CSSProperties}
+                                        onMouseEnter={(e) => e.currentTarget.style.color = '#FF6B9D'}
+                                        onMouseLeave={(e) => e.currentTarget.style.color = '#94a3b8'}
+                                        onClick={() => fileInputRef.current?.click()}
+                                        title="Attach File"
+                                    >
+                                        <Paperclip size={20} />
+                                    </button>
+                                    <button
+                                        className="text-slate-400 p-2 transition-colors melon-button juice-splash"
+                                        onMouseEnter={(e) => e.currentTarget.style.color = '#FF6B9D'}
+                                        onMouseLeave={(e) => e.currentTarget.style.color = '#94a3b8'}
+                                        onClick={() => fileInputRef.current?.click()}
+                                        title="Send Image"
+                                    >
+                                        <ImageIcon size={20} />
+                                    </button>
+                                    <input
+                                        type="text"
+                                        value={inputValue}
+                                        onChange={(e) => setInputValue(e.target.value)}
+                                        onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+                                        placeholder="Type your message..."
+                                        className="flex-1 bg-transparent text-slate-200 px-4 py-2 focus:outline-none placeholder-slate-500"
+                                    />
+                                    <button
+                                        className="text-slate-400 p-2 transition-colors melon-button"
+                                        style={{ color: showEmojiPicker ? '#FF6B9D' : undefined }}
+                                        onMouseEnter={(e) => !showEmojiPicker && (e.currentTarget.style.color = '#FF6B9D')}
+                                        onMouseLeave={(e) => !showEmojiPicker && (e.currentTarget.style.color = '#94a3b8')}
+                                        onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                                    >
+                                        <Smile size={20} />
+                                    </button>
+                                    <button
+                                        onClick={handleSendMessage}
+                                        className={`p-2 rounded-xl ml-2 transition-all melon-button juice-splash ${inputValue.trim() ? 'text-white melon-glow' : 'bg-slate-700 text-slate-500'}`}
+                                        style={{ backgroundColor: inputValue.trim() ? '#FF6B9D' : undefined }}
+                                    >
+                                        <Send size={18} />
+                                    </button>
                                 </div>
-                            )}
-
-                            <div className="bg-slate-800 rounded-2xl flex items-center px-4 py-2 shadow-inner">
-                                <input
-                                    type="file"
-                                    ref={fileInputRef}
-                                    className="hidden"
-                                    onChange={handleFileSelect}
-                                />
-
-                                <button
-                                    className="text-slate-400 p-2 transition-colors melon-button juice-splash"
-                                    style={{ '--hover-color': '#FF6B9D' } as React.CSSProperties}
-                                    onMouseEnter={(e) => e.currentTarget.style.color = '#FF6B9D'}
-                                    onMouseLeave={(e) => e.currentTarget.style.color = '#94a3b8'}
-                                    onClick={() => fileInputRef.current?.click()}
-                                    title="Attach File"
-                                >
-                                    <Paperclip size={20} />
-                                </button>
-                                <button
-                                    className="text-slate-400 p-2 transition-colors melon-button juice-splash"
-                                    onMouseEnter={(e) => e.currentTarget.style.color = '#FF6B9D'}
-                                    onMouseLeave={(e) => e.currentTarget.style.color = '#94a3b8'}
-                                    onClick={() => fileInputRef.current?.click()}
-                                    title="Send Image"
-                                >
-                                    <ImageIcon size={20} />
-                                </button>
-                                <input
-                                    type="text"
-                                    value={inputValue}
-                                    onChange={(e) => setInputValue(e.target.value)}
-                                    onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                                    placeholder="Type your message..."
-                                    className="flex-1 bg-transparent text-slate-200 px-4 py-2 focus:outline-none placeholder-slate-500"
-                                />
-                                <button
-                                    className="text-slate-400 p-2 transition-colors melon-button"
-                                    style={{ color: showEmojiPicker ? '#FF6B9D' : undefined }}
-                                    onMouseEnter={(e) => !showEmojiPicker && (e.currentTarget.style.color = '#FF6B9D')}
-                                    onMouseLeave={(e) => !showEmojiPicker && (e.currentTarget.style.color = '#94a3b8')}
-                                    onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                                >
-                                    <Smile size={20} />
-                                </button>
-                                <button
-                                    onClick={handleSendMessage}
-                                    className={`p-2 rounded-xl ml-2 transition-all melon-button juice-splash ${inputValue.trim() ? 'text-white melon-glow' : 'bg-slate-700 text-slate-500'}`}
-                                    style={{ backgroundColor: inputValue.trim() ? '#FF6B9D' : undefined }}
-                                >
-                                    <Send size={18} />
-                                </button>
                             </div>
-                        </div>
+                        )}
+
+                        {/* Blocked Message Notice - Replaces input area when blocked or while checking */}
+                        {(isBlockedByOther || isCheckingBlocked) && (
+                            <div className="px-6 py-4 border-t border-slate-800 bg-slate-900 flex items-center justify-center m-0 min-h-[60px]">
+                                {isCheckingBlocked ? (
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-4 h-4 border-2 border-slate-400 border-t-transparent rounded-full animate-spin"></div>
+                                        <p className="text-sm text-slate-400">Đang kiểm tra...</p>
+                                    </div>
+                                ) : (
+                                    <p className="text-sm text-slate-300 font-medium text-center">Bạn không thể tiếp tục trò chuyện với người này</p>
+                                )}
+                            </div>
+                        )}
                     </>
                 )}
 
@@ -644,7 +872,33 @@ export const ChatPage: React.FC = () => {
             </div>
 
             {/* Settings Modal */}
-            <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+            <SettingsModal
+                isOpen={isSettingsOpen}
+                onClose={() => setIsSettingsOpen(false)}
+                blockedUsers={blockedUsers}
+                onUnblock={async (userId: string) => {
+                    try {
+                        await client.delete(`/friendships/block/${userId}`);
+                        toast.success('User unblocked successfully');
+
+                        // Clear blocked status cache for all conversations with this user
+                        setBlockedStatusCache(prev => {
+                            const newCache = { ...prev };
+                            Object.keys(newCache).forEach(key => {
+                                if (key.endsWith(`-${userId}`)) {
+                                    delete newCache[key];
+                                }
+                            });
+                            return newCache;
+                        });
+
+                        await Promise.all([loadBlockedUsers(), loadFriends(), loadPendingRequests(), loadConversations()]);
+                    } catch (error) {
+                        console.error('Failed to unblock user', error);
+                        toast.error('Failed to unblock user');
+                    }
+                }}
+            />
 
             {/* Optional Right Sidebar (Details) - Toggleable */}
             {activeConvId && isRightSidebarOpen && (
@@ -657,79 +911,278 @@ export const ChatPage: React.FC = () => {
                             <p className="text-sm text-slate-400">{headerInfo.subtitle}</p>
                         </div>
 
-                        {/* Options Section */}
-                        <div className="mb-6">
-                            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4">OPTIONS</h4>
-                            <ul className="space-y-2">
-                                <li className="text-sm text-slate-300 hover:text-white cursor-pointer py-2 px-3 rounded-lg hover:bg-slate-800 transition-colors">
-                                    Search in Conversation
-                                </li>
-                                <li className="text-sm text-slate-300 hover:text-white cursor-pointer py-2 px-3 rounded-lg hover:bg-slate-800 transition-colors">
-                                    Notifications
-                                </li>
-                                <li className="text-sm text-red-400 hover:text-red-300 cursor-pointer py-2 px-3 rounded-lg hover:bg-slate-800 transition-colors mt-4">
-                                    Block User
-                                </li>
-                            </ul>
-                        </div>
+                        {/* Main Sections with Dropdown */}
+                        <div className="space-y-1">
+                            {/* 1. Thông tin về đoạn chat */}
+                            <div className="mb-2">
+                                <button
+                                    onClick={() => {
+                                        const newExpanded = new Set(expandedSections);
+                                        if (newExpanded.has('info')) {
+                                            newExpanded.delete('info');
+                                        } else {
+                                            newExpanded.add('info');
+                                        }
+                                        setExpandedSections(newExpanded);
+                                    }}
+                                    className="w-full flex items-center justify-between py-3 px-4 text-sm text-white hover:bg-slate-800 rounded-lg transition-colors"
+                                >
+                                    <span>Thông tin về đoạn chat</span>
+                                    <ChevronRight size={16} className={`transition-transform ${expandedSections.has('info') ? 'rotate-90' : ''}`} />
+                                </button>
+                                {expandedSections.has('info') && (
+                                    <div className="ml-4 mt-2 space-y-1 border-l-2 border-slate-700 pl-4">
+                                        <div className="text-xs text-slate-400 py-2">
+                                            {activeConv?.type === ConversationType.GROUP ? (
+                                                <>
+                                                    <p className="text-slate-300 mb-1">Group: {activeConv.name}</p>
+                                                    <p className="text-slate-400">
+                                                        {Array.isArray(activeConv.participants) ? activeConv.participants.length : 0} participants
+                                                    </p>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <p className="text-slate-300 mb-1">Direct Chat</p>
+                                                    <p className="text-slate-400">One-on-one conversation</p>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
 
-                        {/* Media & Files Section */}
-                        <div>
-                            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4">MEDIA & FILES</h4>
-                            <div className="space-y-4">
-                                {/* Images */}
-                                <div>
-                                    <div className="flex items-center justify-between mb-3">
-                                        <span className="text-sm text-slate-300 font-medium">Images</span>
-                                        <span className="text-xs text-slate-500">
-                                            {messages.filter(m => m.type === MessageType.IMAGE || m.attachments?.some(a => a.type === 'IMAGE')).length}
-                                        </span>
+                            {/* 2. Tùy chỉnh đoạn chat */}
+                            <div className="mb-2">
+                                <button
+                                    onClick={() => {
+                                        const newExpanded = new Set(expandedSections);
+                                        if (newExpanded.has('customize')) {
+                                            newExpanded.delete('customize');
+                                        } else {
+                                            newExpanded.add('customize');
+                                        }
+                                        setExpandedSections(newExpanded);
+                                    }}
+                                    className="w-full flex items-center justify-between py-3 px-4 text-sm text-white hover:bg-slate-800 rounded-lg transition-colors"
+                                >
+                                    <span>Tùy chỉnh đoạn chat</span>
+                                    <ChevronRight size={16} className={`transition-transform ${expandedSections.has('customize') ? 'rotate-90' : ''}`} />
+                                </button>
+                                {expandedSections.has('customize') && (
+                                    <div className="ml-4 mt-2 space-y-1 border-l-2 border-slate-700 pl-4">
+                                        <button className="w-full text-left text-xs text-slate-300 hover:text-white py-2 px-3 rounded hover:bg-slate-800 transition-colors">
+                                            Change Theme
+                                        </button>
+                                        <button className="w-full text-left text-xs text-slate-300 hover:text-white py-2 px-3 rounded hover:bg-slate-800 transition-colors">
+                                            Change Wallpaper
+                                        </button>
+                                        <button className="w-full text-left text-xs text-slate-300 hover:text-white py-2 px-3 rounded hover:bg-slate-800 transition-colors">
+                                            Font Size
+                                        </button>
                                     </div>
-                                    <div className="grid grid-cols-3 gap-2">
-                                        {messages
-                                            .filter(m => m.type === MessageType.IMAGE || m.attachments?.some(a => a.type === 'IMAGE'))
-                                            .slice(0, 9)
-                                            .map((message) => {
-                                                const imageUrl = message.attachments?.find(a => a.type === 'IMAGE')?.url || message.content;
-                                                return (
-                                                    <div key={message.id} className="aspect-square rounded-lg overflow-hidden bg-slate-800 cursor-pointer hover:opacity-80 transition-opacity">
-                                                        <img src={imageUrl} alt="Media" className="w-full h-full object-cover" />
-                                                    </div>
-                                                );
-                                            })}
-                                    </div>
-                                </div>
+                                )}
+                            </div>
 
-                                {/* Files */}
-                                <div>
-                                    <div className="flex items-center justify-between mb-3">
-                                        <span className="text-sm text-slate-300 font-medium">Files</span>
-                                        <span className="text-xs text-slate-500">
-                                            {messages.filter(m => m.type === MessageType.FILE || m.attachments?.some(a => a.type === 'FILE')).length}
-                                        </span>
+                            {/* 3. File phương tiện & file */}
+                            <div className="mb-2">
+                                <button
+                                    onClick={() => {
+                                        const newExpanded = new Set(expandedSections);
+                                        if (newExpanded.has('media')) {
+                                            newExpanded.delete('media');
+                                        } else {
+                                            newExpanded.add('media');
+                                        }
+                                        setExpandedSections(newExpanded);
+                                    }}
+                                    className="w-full flex items-center justify-between py-3 px-4 text-sm text-white hover:bg-slate-800 rounded-lg transition-colors"
+                                >
+                                    <span>File phương tiện & file</span>
+                                    <ChevronRight size={16} className={`transition-transform ${expandedSections.has('media') ? 'rotate-90' : ''}`} />
+                                </button>
+                                {expandedSections.has('media') && (
+                                    <div className="ml-4 mt-2 space-y-4 border-l-2 border-slate-700 pl-4">
+                                        {/* Images */}
+                                        <div>
+                                            <div className="flex items-center justify-between mb-3">
+                                                <span className="text-xs text-slate-300 font-medium">Images</span>
+                                                <span className="text-xs text-slate-500">
+                                                    {messages.filter(m => m.type === MessageType.IMAGE || m.attachments?.some(a => a.type === 'IMAGE')).length}
+                                                </span>
+                                            </div>
+                                            <div className="grid grid-cols-3 gap-2">
+                                                {messages
+                                                    .filter(m => m.type === MessageType.IMAGE || m.attachments?.some(a => a.type === 'IMAGE'))
+                                                    .slice(0, 9)
+                                                    .map((message) => {
+                                                        const imageUrl = message.attachments?.find(a => a.type === 'IMAGE')?.url || message.content;
+                                                        return (
+                                                            <div key={message.id} className="aspect-square rounded-lg overflow-hidden bg-slate-800 cursor-pointer hover:opacity-80 transition-opacity">
+                                                                <img src={imageUrl} alt="Media" className="w-full h-full object-cover" />
+                                                            </div>
+                                                        );
+                                                    })}
+                                            </div>
+                                        </div>
+
+                                        {/* Files */}
+                                        <div>
+                                            <div className="flex items-center justify-between mb-3">
+                                                <span className="text-xs text-slate-300 font-medium">Files</span>
+                                                <span className="text-xs text-slate-500">
+                                                    {messages.filter(m => m.type === MessageType.FILE || m.attachments?.some(a => a.type === 'FILE')).length}
+                                                </span>
+                                            </div>
+                                            <div className="space-y-2">
+                                                {messages
+                                                    .filter(m => m.type === MessageType.FILE || m.attachments?.some(a => a.type === 'FILE'))
+                                                    .slice(0, 5)
+                                                    .map((message) => {
+                                                        const file = message.attachments?.find(a => a.type === 'FILE');
+                                                        return (
+                                                            <div key={message.id} className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-800 cursor-pointer transition-colors">
+                                                                <div className="w-10 h-10 bg-slate-700 rounded flex items-center justify-center">
+                                                                    <Paperclip size={16} className="text-slate-400" />
+                                                                </div>
+                                                                <div className="flex-1 min-w-0">
+                                                                    <p className="text-xs text-slate-200 truncate">{file?.name || 'File'}</p>
+                                                                    <p className="text-[10px] text-slate-500">
+                                                                        {file?.size ? `${(file.size / 1024).toFixed(1)} KB` : 'Unknown size'}
+                                                                    </p>
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                            </div>
+                                        </div>
                                     </div>
-                                    <div className="space-y-2">
-                                        {messages
-                                            .filter(m => m.type === MessageType.FILE || m.attachments?.some(a => a.type === 'FILE'))
-                                            .slice(0, 5)
-                                            .map((message) => {
-                                                const file = message.attachments?.find(a => a.type === 'FILE');
-                                                return (
-                                                    <div key={message.id} className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-800 cursor-pointer transition-colors">
-                                                        <div className="w-10 h-10 bg-slate-700 rounded flex items-center justify-center">
-                                                            <Paperclip size={16} className="text-slate-400" />
-                                                        </div>
-                                                        <div className="flex-1 min-w-0">
-                                                            <p className="text-sm text-slate-200 truncate">{file?.name || 'File'}</p>
-                                                            <p className="text-xs text-slate-500">
-                                                                {file?.size ? `${(file.size / 1024).toFixed(1)} KB` : 'Unknown size'}
-                                                            </p>
-                                                        </div>
-                                                    </div>
-                                                );
-                                            })}
+                                )}
+                            </div>
+
+                            {/* 4. Quyền riêng tư và hỗ trợ */}
+                            <div className="mb-2">
+                                <button
+                                    onClick={() => {
+                                        const newExpanded = new Set(expandedSections);
+                                        if (newExpanded.has('privacy')) {
+                                            newExpanded.delete('privacy');
+                                        } else {
+                                            newExpanded.add('privacy');
+                                        }
+                                        setExpandedSections(newExpanded);
+                                    }}
+                                    className="w-full flex items-center justify-between py-3 px-4 text-sm text-white hover:bg-slate-800 rounded-lg transition-colors"
+                                >
+                                    <span>Quyền riêng tư và hỗ trợ</span>
+                                    <ChevronRight size={16} className={`transition-transform ${expandedSections.has('privacy') ? 'rotate-90' : ''}`} />
+                                </button>
+                                {expandedSections.has('privacy') && (
+                                    <div className="ml-4 mt-2 space-y-1 border-l-2 border-slate-700 pl-4">
+                                        {activeConv?.type === ConversationType.DIRECT ? (
+                                            <>
+                                                <button className="w-full text-left text-xs text-slate-300 hover:text-white py-2 px-3 rounded hover:bg-slate-800 transition-colors flex items-center gap-2">
+                                                    <span>🔔</span>
+                                                    Tắt thông báo
+                                                </button>
+                                                <button className="w-full text-left text-xs text-slate-300 hover:text-white py-2 px-3 rounded hover:bg-slate-800 transition-colors flex items-center gap-2">
+                                                    <span>🔒</span>
+                                                    Quyền nhắn tin
+                                                </button>
+                                                <button className="w-full text-left text-xs text-slate-300 hover:text-white py-2 px-3 rounded hover:bg-slate-800 transition-colors flex items-center gap-2">
+                                                    <span>⏰</span>
+                                                    Tin nhắn tự hủy
+                                                </button>
+                                                <button className="w-full text-left text-xs text-slate-300 hover:text-white py-2 px-3 rounded hover:bg-slate-800 transition-colors flex items-center gap-2">
+                                                    <span>👁️</span>
+                                                    Thông báo đã đọc
+                                                    <span className="ml-auto text-xs text-slate-500">Bật</span>
+                                                </button>
+                                                <button className="w-full text-left text-xs text-slate-300 hover:text-white py-2 px-3 rounded hover:bg-slate-800 transition-colors flex items-center gap-2">
+                                                    <span>🔐</span>
+                                                    Xác minh mã hóa đầu cuối
+                                                </button>
+                                                <button className="w-full text-left text-xs text-slate-300 hover:text-white py-2 px-3 rounded hover:bg-slate-800 transition-colors flex items-center gap-2">
+                                                    <span>🚫</span>
+                                                    Hạn chế
+                                                </button>
+                                                <button
+                                                    onClick={async () => {
+                                                        const participants = Array.isArray(activeConv.participants) ? activeConv.participants : [];
+                                                        const otherId = participants.find(id => id !== currentUser?.id);
+                                                        if (!otherId) return;
+
+                                                        if (!confirm('Are you sure you want to block this user? This will unfriend them and they won\'t be able to find you.')) {
+                                                            return;
+                                                        }
+
+                                                        try {
+                                                            // First unfriend if they are friends
+                                                            try {
+                                                                await client.delete(`/friendships/${otherId}`);
+                                                            } catch (e) {
+                                                                // Ignore if not friends
+                                                            }
+                                                            // Then block
+                                                            await client.post(`/friendships/block/${otherId}`);
+                                                            toast.success('User blocked successfully');
+
+                                                            // Clear blocked status cache for this conversation
+                                                            const cacheKey = `${activeConv.id}-${otherId}`;
+                                                            setBlockedStatusCache(prev => {
+                                                                const newCache = { ...prev };
+                                                                delete newCache[cacheKey];
+                                                                return newCache;
+                                                            });
+
+                                                            await Promise.all([loadBlockedUsers(), loadFriends(), loadPendingRequests(), loadConversations()]);
+                                                            // Close the conversation if it's the blocked user
+                                                            if (activeConvId === activeConv.id) {
+                                                                setActiveConvId(null);
+                                                            }
+                                                        } catch (error) {
+                                                            console.error('Failed to block user', error);
+                                                            toast.error('Failed to block user');
+                                                        }
+                                                    }}
+                                                    className="w-full text-left text-xs text-red-400 hover:text-red-300 py-2 px-3 rounded hover:bg-slate-800 transition-colors flex items-center gap-2"
+                                                >
+                                                    <span>🚫</span>
+                                                    Chặn
+                                                </button>
+                                                <button
+                                                    onClick={async () => {
+                                                        const participants = Array.isArray(activeConv.participants) ? activeConv.participants : [];
+                                                        const otherId = participants.find(id => id !== currentUser?.id);
+                                                        if (!otherId) return;
+
+                                                        if (!confirm('Are you sure you want to report this conversation?')) {
+                                                            return;
+                                                        }
+
+                                                        toast('Report feature coming soon', { icon: 'ℹ️' });
+                                                    }}
+                                                    className="w-full text-left text-xs text-orange-400 hover:text-orange-300 py-2 px-3 rounded hover:bg-slate-800 transition-colors flex items-center gap-2"
+                                                >
+                                                    <span>⚠️</span>
+                                                    Báo cáo
+                                                    <span className="ml-auto text-[10px] text-slate-500">Đóng góp ý kiến và báo cáo cuộc trò chuyện</span>
+                                                </button>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <button className="w-full text-left text-xs text-slate-300 hover:text-white py-2 px-3 rounded hover:bg-slate-800 transition-colors flex items-center gap-2">
+                                                    <span>🔔</span>
+                                                    Tắt thông báo
+                                                </button>
+                                                <button className="w-full text-left text-xs text-slate-300 hover:text-white py-2 px-3 rounded hover:bg-slate-800 transition-colors flex items-center gap-2">
+                                                    <span>👁️</span>
+                                                    Thông báo đã đọc
+                                                    <span className="ml-auto text-xs text-slate-500">Bật</span>
+                                                </button>
+                                            </>
+                                        )}
                                     </div>
-                                </div>
+                                )}
                             </div>
                         </div>
                     </div>

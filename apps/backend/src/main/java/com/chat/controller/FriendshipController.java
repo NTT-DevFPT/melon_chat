@@ -81,4 +81,17 @@ public class FriendshipController {
         friendshipService.unblockUser(currentUser.getId(), userId);
         return ResponseEntity.ok("User unblocked successfully");
     }
+
+    @GetMapping("/blocked")
+    public ResponseEntity<List<User>> getBlockedUsers(@AuthenticationPrincipal UserPrincipal currentUser) {
+        List<User> blockedUsers = friendshipService.getBlockedUsers(currentUser.getId());
+        return ResponseEntity.ok(blockedUsers);
+    }
+
+    @GetMapping("/blocked-by/{userId}")
+    public ResponseEntity<Boolean> isBlockedBy(@AuthenticationPrincipal UserPrincipal currentUser,
+            @PathVariable UUID userId) {
+        boolean isBlocked = friendshipService.isBlockedBy(currentUser.getId(), userId);
+        return ResponseEntity.ok(isBlocked);
+    }
 }

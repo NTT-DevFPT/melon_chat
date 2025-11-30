@@ -1,15 +1,16 @@
 import React from 'react';
 import { Message, MessageType, User } from '../types';
-import { Check, CheckCheck, FileText, Image as ImageIcon } from 'lucide-react';
+import { Check, CheckCheck, FileText, Trash2 } from 'lucide-react';
 
 interface MessageBubbleProps {
   message: Message;
   isMe: boolean;
   sender?: User;
   showAvatar: boolean;
+  onDelete?: () => void;
 }
 
-export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isMe, sender, showAvatar }) => {
+export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isMe, sender, showAvatar, onDelete }) => {
 
   const formatTime = (dateString: string) => {
     const date = new Date(dateString);
@@ -41,6 +42,17 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isMe, sen
             borderBottomLeftRadius: !isMe ? '0' : undefined
           }}
         >
+          {/* Delete button (only for my messages) */}
+          {isMe && onDelete && (
+            <button
+              type="button"
+              onClick={onDelete}
+              className="absolute -top-2 -right-2 bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white rounded-full p-1 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"
+              title="Delete message"
+            >
+              <Trash2 size={14} />
+            </button>
+          )}
           {/* Image Attachments */}
           {message.type === MessageType.IMAGE && message.attachments && (
             <div className="mb-2 grid grid-cols-1 gap-1">

@@ -1,13 +1,16 @@
 import React, { useState } from 'react';
-import { X, User, Bell, Shield, Moon, Volume2, Monitor } from 'lucide-react';
+import { X, User, Bell, Shield, Moon, Volume2, Monitor, Ban } from 'lucide-react';
+import { User as UserType } from '../types';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  blockedUsers?: UserType[];
+  onUnblock?: (userId: string) => Promise<void>;
 }
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
-  const [activeTab, setActiveTab] = useState<'account' | 'notifications' | 'appearance'>('account');
+export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, blockedUsers = [], onUnblock }) => {
+  const [activeTab, setActiveTab] = useState<'account' | 'notifications' | 'appearance' | 'blocked'>('account');
 
   if (!isOpen) return null;
 
@@ -61,6 +64,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
             >
               <Monitor size={18} />
               <span>Appearance</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('blocked')}
+              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
+                activeTab === 'blocked' 
+                  ? 'bg-orange-500/10 text-orange-500' 
+                  : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+              }`}
+            >
+              <Ban size={18} />
+              <span>Blocked Users</span>
+              {blockedUsers.length > 0 && (
+                <span className="ml-auto px-2 py-0.5 text-xs rounded-full bg-red-500/20 text-red-400">
+                  {blockedUsers.length}
+                </span>
+              )}
             </button>
           </div>
 
@@ -158,6 +177,53 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                         <button className="w-10 h-10 rounded-full bg-rose-500 hover:ring-4 hover:ring-slate-800 hover:ring-offset-2 hover:ring-offset-rose-500 transition-all"></button>
                      </div>
                  </div>
+              </div>
+            )}
+
+            {/* Blocked Users */}
+            {activeTab === 'blocked' && (
+              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <div>
+                  <h3 className="text-lg font-bold text-white mb-2">Blocked Users</h3>
+                  <p className="text-sm text-slate-400 mb-6">
+                    Users you've blocked won't be able to find you or send you messages.
+                  </p>
+                </div>
+
+                {blockedUsers.length === 0 ? (
+                  <div className="text-center py-12">
+                    <Ban size={48} className="mx-auto text-slate-600 mb-4" />
+                    <p className="text-slate-400">No blocked users</p>
+                    <p className="text-xs text-slate-500 mt-2">Users you block will appear here</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {blockedUsers.map((user) => (
+                      <div
+                        key={user.id}
+                        className="flex items-center justify-between p-4 bg-slate-800 rounded-xl border border-slate-700"
+                      >
+                        <div className="flex items-center gap-3">
+                          <img
+                            src={user.avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.fullName || user.username)}&background=random`}
+                            alt={user.fullName}
+                            className="w-12 h-12 rounded-full object-cover"
+                          />
+                          <div>
+                            <p className="text-white font-medium">{user.fullName}</p>
+                            <p className="text-xs text-slate-400">@{user.username}</p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => onUnblock?.(user.id)}
+                          className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm rounded-lg transition-colors"
+                        >
+                          Unblock
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 

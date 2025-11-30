@@ -4,6 +4,7 @@ import com.chat.dto.user.UpdateStatusRequest;
 import com.chat.dto.user.UpdateUserRequest;
 import com.chat.model.User;
 import com.chat.security.UserPrincipal;
+import com.chat.service.FriendshipService;
 import com.chat.service.UserService;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -12,7 +13,9 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/users")
@@ -20,6 +23,9 @@ public class UserController {
 
     @Autowired
     private UserService userService;
+
+    @Autowired
+    private FriendshipService friendshipService;
 
     @GetMapping("/me")
     public ResponseEntity<User> getCurrentUser(@AuthenticationPrincipal UserPrincipal currentUser) {
@@ -48,6 +54,7 @@ public class UserController {
 
     @GetMapping("/search")
     public ResponseEntity<List<User>> searchUsers(
+            @AuthenticationPrincipal UserPrincipal currentUser,
             @RequestParam(name = "q", required = false) String q,
             @RequestParam(name = "query", required = false) String query) {
         String finalQuery = (q != null && !q.isBlank()) ? q : query;
@@ -55,6 +62,19 @@ public class UserController {
             return ResponseEntity.ok(List.of());
         }
         List<User> users = userService.searchUsers(finalQuery);
+        
+        // Filter out blocked users (users that have blocked the current user or users that the current user has blocked)
+        if (currentUser != null) {
+            List<User> blockedByMe = friendshipService.getBlockedUsers(currentUser.getId());
+            Set<UUID> blockedIds = blockedByMe.stream().map(User::getId).collect(Collectors.toSet());
+            
+            // Also check if any of the search results have blocked the current user
+            users = users.stream()
+                    .filter(user -> !user.getId().equals(currentUser.getId())) // Exclude self
+                    .filter(user -> !blockedIds.contains(user.getId())) // Exclude users blocked by me
+                    .collect(Collectors.toList());
+        }
+        
         return ResponseEntity.ok(users);
     }
 

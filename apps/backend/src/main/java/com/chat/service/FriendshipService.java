@@ -128,6 +128,32 @@ public class FriendshipService {
     }
 
     /**
+     * Get blocked users (users that the current user has blocked)
+     */
+    public List<User> getBlockedUsers(UUID userId) {
+        List<Friendship> blockedFriendships = friendshipRepository.findBlockedUsers(userId);
+        List<User> blockedUsers = new ArrayList<>();
+
+        for (Friendship f : blockedFriendships) {
+            try {
+                UUID blockedUserId = f.getReceiverId();
+                userRepository.findById(blockedUserId).ifPresent(blockedUsers::add);
+            } catch (Exception e) {
+                logger.error("Error processing blocked friendship {}: {}", f.getId(), e.getMessage());
+            }
+        }
+
+        return blockedUsers;
+    }
+
+    /**
+     * Check if current user is blocked by another user
+     */
+    public boolean isBlockedBy(UUID userId, UUID blockerId) {
+        return friendshipRepository.isUserBlockedBy(userId, blockerId);
+    }
+
+    /**
      * Unblock user
      */
     @Transactional
