@@ -6,7 +6,7 @@ export enum UserStatus {
   ONLINE = 'ONLINE',
   OFFLINE = 'OFFLINE',
   AWAY = 'AWAY',
-  BUSY = 'BUSY'
+  BUSY = 'BUSY',
 }
 
 export interface User {
@@ -30,7 +30,7 @@ export interface PendingFriendRequest {
 // --- Chat Service (MongoDB for History, Redis for Recent) ---
 export enum ConversationType {
   DIRECT = 'DIRECT',
-  GROUP = 'GROUP'
+  GROUP = 'GROUP',
 }
 
 export interface Participant {
@@ -56,9 +56,9 @@ export interface Conversation {
 export enum MessageType {
   TEXT = 'TEXT',
   IMAGE = 'IMAGE',
-  FILE = 'FILE',
   VIDEO = 'VIDEO',
-  SYSTEM = 'SYSTEM'
+  FILE = 'FILE',
+  SYSTEM = 'SYSTEM',
 }
 
 export interface Attachment {
@@ -75,6 +75,9 @@ export interface Message {
   senderId: string;
   type: MessageType;
   content: string; // Text content or Caption
+  attachmentUrl?: string;
+  attachmentName?: string;
+  attachmentSize?: number;
   attachments?: Attachment[];
   createdAt: string;
   status: 'SENDING' | 'SENT' | 'DELIVERED' | 'READ';

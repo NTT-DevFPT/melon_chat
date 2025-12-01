@@ -20,6 +20,11 @@ public enum MessageType {
     FILE,
 
     /**
+     * Video attachment
+     */
+    VIDEO,
+
+    /**
      * System generated message (user joined, left, etc.)
      */
     SYSTEM

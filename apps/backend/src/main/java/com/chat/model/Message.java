@@ -166,9 +166,9 @@ public class Message extends BaseEntity {
         if (this.type == MessageType.TEXT && (this.content == null || this.content.trim().isEmpty())) {
             throw new IllegalStateException("Text message must have content");
         }
-        if ((this.type == MessageType.IMAGE || this.type == MessageType.FILE) &&
+        if ((this.type == MessageType.IMAGE || this.type == MessageType.FILE || this.type == MessageType.VIDEO) &&
                 (this.attachmentUrl == null || this.attachmentUrl.trim().isEmpty())) {
-            throw new IllegalStateException("Image/File message must have attachment URL");
+            throw new IllegalStateException("Image/File/Video message must have attachment URL");
         }
     }
 }

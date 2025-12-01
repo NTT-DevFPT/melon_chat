@@ -1,0 +1,9 @@
+{
+  "apps/web/**/*.{ts,tsx}": [
+    "cd apps/web && eslint --fix",
+    "cd apps/web && prettier --write"
+  ],
+  "apps/web/**/*.{json,css,md}": [
+    "cd apps/web && prettier --write"
+  ]
+}

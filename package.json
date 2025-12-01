@@ -12,7 +12,11 @@
     "install:all": "pnpm install && cd apps/backend && mvn clean install",
     "docker:up": "docker-compose -f infra/docker/docker-compose.yml up",
     "docker:down": "docker-compose -f infra/docker/docker-compose.yml down",
-    "docker:build": "docker-compose -f infra/docker/docker-compose.yml build"
+    "docker:build": "docker-compose -f infra/docker/docker-compose.yml build",
+    "prepare": "husky install",
+    "test:web": "pnpm --filter web test",
+    "lint:web": "pnpm --filter web lint",
+    "format:web": "pnpm --filter web format"
   },
   "keywords": [
     "monorepo",
@@ -29,6 +33,8 @@
     "@types/node": "^22.14.0",
     "typescript": "~5.8.2",
     "prettier": "^3.0.0",
-    "eslint": "^8.0.0"
+    "eslint": "^8.0.0",
+    "husky": "^8.0.3",
+    "lint-staged": "^15.2.0"
   }
 }
