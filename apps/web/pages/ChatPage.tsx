@@ -1,18 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Sidebar } from '../components/Sidebar';
-import { MessageBubble } from '../components/MessageBubble';
+import { ChatHeader } from '../components/ChatHeader';
+import { ChatMessageList } from '../components/ChatMessageList';
+import { ChatInput } from '../components/ChatInput';
 import { VideoCall } from '../components/VideoCall';
 import { SettingsModal } from '../components/SettingsModal';
-import {
-  Phone,
-  Video,
-  MoreVertical,
-  Paperclip,
-  Smile,
-  Send,
-  Image as ImageIcon,
-  ChevronRight,
-} from 'lucide-react';
+import { ChatHeaderSkeleton } from '../components/ChatHeaderSkeleton';
+import { MessageListSkeleton } from '../components/MessageListSkeleton';
+import { Paperclip, ChevronRight } from 'lucide-react';
 import {
   Conversation,
   User,
@@ -28,34 +23,6 @@ import { toast } from 'react-hot-toast';
 import { webSocketService } from '@/src/services/WebSocketService';
 import { useFileUpload } from '@/src/hooks/useFileUpload';
 
-const EMOJIS = [
-  '🍉',
-  '😀',
-  '😂',
-  '🤣',
-  '❤️',
-  '😍',
-  '😒',
-  '👌',
-  '😭',
-  '😩',
-  '🫣',
-  '🫡',
-  '🫠',
-  '💀',
-  '🤡',
-  '🤖',
-  '👻',
-  '👽',
-  '💩',
-  '👍',
-  '👎',
-  '🔥',
-  '🎉',
-  '👋',
-  '🙏',
-];
-
 export const ChatPage: React.FC = () => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
@@ -63,7 +30,6 @@ export const ChatPage: React.FC = () => {
   const [inputValue, setInputValue] = useState('');
   const [isCallOpen, setIsCallOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
   const [users, setUsers] = useState<Record<string, User>>({});
   const [friends, setFriends] = useState<User[]>([]);
@@ -82,9 +48,6 @@ export const ChatPage: React.FC = () => {
   const [isLoadingBlockedUsers, setIsLoadingBlockedUsers] =
     useState<boolean>(true);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const emojiPickerRef = useRef<HTMLDivElement>(null);
   const activeConvIdRef = useRef<string | null>(null);
 
   const { user: currentUser } = useAuth();
@@ -279,8 +242,7 @@ export const ChatPage: React.FC = () => {
       loadConversations();
     }, 5000); // Refresh every 5 seconds
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadConversations]);
 
   // Remove redundant visibility listener here (it was causing double fetches)
   // The main visibility listener below handles everything
@@ -450,29 +412,6 @@ export const ChatPage: React.FC = () => {
       document.removeEventListener('visibilitychange', handleVisibility);
   }, [loadFriends, loadPendingRequests, loadBlockedUsers, loadConversations]);
 
-  // Scroll to bottom on new message
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages, activeConvId]);
-
-  // Close emoji picker when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (
-        emojiPickerRef.current &&
-        !emojiPickerRef.current.contains(event.target as Node)
-      ) {
-        setShowEmojiPicker(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
   const handleSendMessage = async () => {
     if (!inputValue.trim() || !activeConvId) return;
 
@@ -485,7 +424,6 @@ export const ChatPage: React.FC = () => {
         }
       );
       setInputValue('');
-      setShowEmojiPicker(false);
       // Refresh messages immediately (or wait for WebSocket)
       // Waiting for WebSocket is better for consistency, but immediate feedback is nice.
       // Let's rely on WebSocket for the incoming message, but we can optimistically add it if we want.
@@ -577,10 +515,6 @@ export const ChatPage: React.FC = () => {
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
-  };
-
-  const handleAddEmoji = (emoji: string) => {
-    setInputValue((prev) => prev + emoji);
   };
 
   const handleCreateGroup = async (name: string, participantIds: string[]) => {
@@ -842,209 +776,49 @@ export const ChatPage: React.FC = () => {
         ) : activeConv?.type === ConversationType.DIRECT &&
           otherId &&
           !users[otherId] ? (
-          <div className="flex-1 flex flex-col items-center justify-center bg-slate-900">
-            <div className="w-10 h-10 border-4 border-slate-800 border-t-[#FF6B9D] rounded-full animate-spin"></div>
-            <p className="text-slate-500 mt-4 text-sm animate-pulse">
-              Loading chat info...
-            </p>
+          <div className="flex-1 flex flex-col bg-slate-900">
+            <ChatHeaderSkeleton />
+            <MessageListSkeleton />
           </div>
         ) : (
           <>
-            {/* Top Header */}
-            <div className="h-16 border-b border-slate-800 flex items-center justify-between px-6 bg-slate-900 z-10">
-              <div className="flex items-center space-x-4">
-                <div className="relative">
-                  <img
-                    src={headerInfo.avatar}
-                    alt={headerInfo.title}
-                    className="w-10 h-10 rounded-full object-cover"
-                  />
-                  {activeConv?.type === ConversationType.DIRECT && (
-                    <span className="absolute bottom-0 right-0 block h-2.5 w-2.5 rounded-full ring-2 ring-slate-900 bg-green-500" />
-                  )}
-                </div>
-                <div>
-                  <h2 className="text-slate-100 font-semibold">
-                    {headerInfo.title}
-                  </h2>
-                  <p className="text-xs text-slate-400">
-                    {headerInfo.subtitle}
-                  </p>
-                </div>
-              </div>
+            <ChatHeader
+              title={headerInfo.title}
+              subtitle={headerInfo.subtitle}
+              avatar={headerInfo.avatar}
+              conversationType={activeConv?.type}
+              onPhoneCall={() => setIsCallOpen(true)}
+              onVideoCall={() => setIsCallOpen(true)}
+              onToggleInfo={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
+              isInfoOpen={isRightSidebarOpen}
+            />
 
-              <div
-                className="flex items-center space-x-4"
-                style={{ color: '#FF6B9D' }}
-              >
-                <button
-                  className="p-2 hover:bg-slate-800 rounded-full transition-colors"
-                  onClick={() => setIsCallOpen(true)}
-                  title="Phone Call"
-                >
-                  <Phone size={20} />
-                </button>
-                <button
-                  className="p-2 hover:bg-slate-800 rounded-full transition-colors"
-                  onClick={() => setIsCallOpen(true)}
-                  title="Video Call"
-                >
-                  <Video size={20} />
-                </button>
-                <button
-                  className="p-2 hover:bg-slate-800 rounded-full transition-colors"
-                  onClick={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
-                  title={isRightSidebarOpen ? 'Hide Info' : 'Show Info'}
-                >
-                  <MoreVertical size={20} />
-                </button>
-              </div>
-            </div>
-
-            {/* Messages List */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-slate-900/50 relative">
-              <div className="flex justify-center mb-4">
-                <span className="text-xs bg-slate-800 text-slate-400 px-3 py-1 rounded-full">
-                  Today
-                </span>
-              </div>
-
-              {messages.map((msg, index) => {
-                const isMe = msg.senderId === currentUser?.id;
-                const showAvatar =
-                  !isMe &&
-                  (index === 0 ||
-                    messages[index - 1].senderId !== msg.senderId);
-                return (
-                  <MessageBubble
-                    key={msg.id}
-                    message={msg}
-                    isMe={isMe}
-                    sender={users[msg.senderId]}
-                    showAvatar={showAvatar}
-                    onDelete={
-                      isMe
-                        ? async () => {
-                            try {
-                              await client.delete(`/chats/messages/${msg.id}`);
-                              setMessages((prev) =>
-                                prev.filter((m) => m.id !== msg.id)
-                              );
-                              // refresh conversations so last message / unreadCount stays in sync
-                              setTimeout(() => loadConversations(), 300);
-                              toast.success('Message deleted');
-                            } catch (error) {
-                              console.error('Failed to delete message', error);
-                              toast.error('Failed to delete message');
-                            }
-                          }
-                        : undefined
-                    }
-                  />
-                );
-              })}
-              <div ref={messagesEndRef} />
-            </div>
+            <ChatMessageList
+              messages={messages}
+              currentUserId={currentUser?.id || ''}
+              users={users}
+              onDeleteMessage={async (messageId: string) => {
+                try {
+                  await client.delete(`/chats/messages/${messageId}`);
+                  setMessages((prev) => prev.filter((m) => m.id !== messageId));
+                  setTimeout(() => loadConversations(), 300);
+                  toast.success('Message deleted');
+                } catch (error) {
+                  console.error('Failed to delete message', error);
+                  toast.error('Failed to delete message');
+                }
+              }}
+            />
 
             {/* Input Area - Hidden when blocked by other user or while checking */}
             {!isBlockedByOther && !isCheckingBlocked && (
-              <div className="px-6 py-4 border-t border-slate-800 bg-slate-900 relative m-0">
-                {/* Emoji Picker Popover */}
-                {showEmojiPicker && (
-                  <div
-                    ref={emojiPickerRef}
-                    className="absolute bottom-20 right-20 bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl p-4 w-72 animate-in slide-in-from-bottom-5 duration-200 z-50"
-                  >
-                    <div className="grid grid-cols-6 gap-2">
-                      {EMOJIS.map((emoji) => (
-                        <button
-                          key={emoji}
-                          onClick={() => handleAddEmoji(emoji)}
-                          className="text-2xl hover:bg-slate-700 rounded-lg p-1 transition-colors"
-                        >
-                          {emoji}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <div className="bg-slate-800 rounded-2xl flex items-center px-4 py-2 shadow-inner">
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    className="hidden"
-                    onChange={handleFileSelect}
-                  />
-
-                  <button
-                    className={`p-2 transition-colors melon-button juice-splash ${isUploading ? 'text-slate-600 cursor-not-allowed' : 'text-slate-400'}`}
-                    style={
-                      { '--hover-color': '#FF6B9D' } as React.CSSProperties
-                    }
-                    onMouseEnter={(e) =>
-                      !isUploading && (e.currentTarget.style.color = '#FF6B9D')
-                    }
-                    onMouseLeave={(e) =>
-                      !isUploading && (e.currentTarget.style.color = '#94a3b8')
-                    }
-                    onClick={() =>
-                      !isUploading && fileInputRef.current?.click()
-                    }
-                    disabled={isUploading}
-                    title="Attach File"
-                  >
-                    <Paperclip size={20} />
-                  </button>
-                  <button
-                    className="text-slate-400 p-2 transition-colors melon-button juice-splash"
-                    onMouseEnter={(e) =>
-                      (e.currentTarget.style.color = '#FF6B9D')
-                    }
-                    onMouseLeave={(e) =>
-                      (e.currentTarget.style.color = '#94a3b8')
-                    }
-                    onClick={() => fileInputRef.current?.click()}
-                    title="Send Image"
-                  >
-                    <ImageIcon size={20} />
-                  </button>
-                  <input
-                    type="text"
-                    value={inputValue}
-                    onChange={(e) => setInputValue(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                    placeholder="Type your message..."
-                    className="flex-1 bg-transparent text-slate-200 px-4 py-2 focus:outline-none placeholder-slate-500"
-                  />
-                  <button
-                    className="text-slate-400 p-2 transition-colors melon-button"
-                    style={{ color: showEmojiPicker ? '#FF6B9D' : undefined }}
-                    onMouseEnter={(e) =>
-                      !showEmojiPicker &&
-                      (e.currentTarget.style.color = '#FF6B9D')
-                    }
-                    onMouseLeave={(e) =>
-                      !showEmojiPicker &&
-                      (e.currentTarget.style.color = '#94a3b8')
-                    }
-                    onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                  >
-                    <Smile size={20} />
-                  </button>
-                  <button
-                    onClick={handleSendMessage}
-                    className={`p-2 rounded-xl ml-2 transition-all melon-button juice-splash ${inputValue.trim() ? 'text-white melon-glow' : 'bg-slate-700 text-slate-500'}`}
-                    style={{
-                      backgroundColor: inputValue.trim()
-                        ? '#FF6B9D'
-                        : undefined,
-                    }}
-                  >
-                    <Send size={18} />
-                  </button>
-                </div>
-              </div>
+              <ChatInput
+                value={inputValue}
+                onChange={setInputValue}
+                onSend={handleSendMessage}
+                onFileSelect={handleFileSelect}
+                isUploading={isUploading}
+              />
             )}
 
             {/* Blocked Message Notice - Replaces input area when blocked or while checking */}

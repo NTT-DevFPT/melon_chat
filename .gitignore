@@ -49,3 +49,6 @@ coverage/
 .cache/
 .temp/
 .tmp/
+
+# Kiro IDE files
+.kiro/
