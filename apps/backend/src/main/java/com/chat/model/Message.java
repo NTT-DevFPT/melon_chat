@@ -53,6 +53,12 @@ public class Message extends BaseEntity {
     @Column(name = "deleted_at")
     private LocalDateTime deletedAt;
 
+    @Column(name = "is_edited", nullable = false)
+    private Boolean isEdited = false;
+
+    @Column(name = "edited_at")
+    private LocalDateTime editedAt;
+
     // Constructors
     public Message() {
     }
@@ -137,6 +143,22 @@ public class Message extends BaseEntity {
         this.deletedAt = deletedAt;
     }
 
+    public Boolean getIsEdited() {
+        return isEdited;
+    }
+
+    public void setIsEdited(Boolean isEdited) {
+        this.isEdited = isEdited;
+    }
+
+    public LocalDateTime getEditedAt() {
+        return editedAt;
+    }
+
+    public void setEditedAt(LocalDateTime editedAt) {
+        this.editedAt = editedAt;
+    }
+
     // Helper methods
     public boolean isDeleted() {
         return this.deletedAt != null;
@@ -158,6 +180,20 @@ public class Message extends BaseEntity {
 
     public void markAsRead() {
         this.status = MessageStatus.READ;
+    }
+
+    public void markAsEdited() {
+        this.isEdited = true;
+        this.editedAt = LocalDateTime.now();
+    }
+
+    public boolean canBeEdited() {
+        if (this.isDeleted()) {
+            return false;
+        }
+        // Check if message is within 15 minutes of creation
+        LocalDateTime fifteenMinutesAgo = LocalDateTime.now().minusMinutes(15);
+        return this.getCreatedAt().isAfter(fifteenMinutesAgo);
     }
 
     @PrePersist

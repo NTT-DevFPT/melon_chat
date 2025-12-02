@@ -1,12 +1,31 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useMemo,
+  Suspense,
+  lazy,
+} from 'react';
 import { Sidebar } from '../components/Sidebar';
 import { ChatHeader } from '../components/ChatHeader';
-import { ChatMessageList } from '../components/ChatMessageList';
+import { VirtualizedMessageList } from '../components/VirtualizedMessageList';
 import { ChatInput } from '../components/ChatInput';
-import { VideoCall } from '../components/VideoCall';
-import { SettingsModal } from '../components/SettingsModal';
+import { TypingIndicator } from '../components/TypingIndicator';
 import { ChatHeaderSkeleton } from '../components/ChatHeaderSkeleton';
 import { MessageListSkeleton } from '../components/MessageListSkeleton';
+import { SkeletonLoader } from '../components/SkeletonLoader';
+
+// Lazy load heavy components
+const VideoCall = lazy(() =>
+  import('../components/VideoCall').then((module) => ({
+    default: module.VideoCall,
+  }))
+);
+const SettingsModal = lazy(() =>
+  import('../components/SettingsModal').then((module) => ({
+    default: module.SettingsModal,
+  }))
+);
 import { Paperclip, ChevronRight } from 'lucide-react';
 import {
   Conversation,
@@ -15,49 +34,109 @@ import {
   UserStatus,
   ConversationType,
   MessageType,
-  PendingFriendRequest,
 } from '../types';
-import { useAuth } from '../context/AuthContext';
-import { client } from '@/src/api/client';
+import { useAuthStore } from '../src/stores';
+import { useTypingStore } from '../src/stores/typingStore';
 import { toast } from 'react-hot-toast';
 import { webSocketService } from '@/src/services/WebSocketService';
 import { useFileUpload } from '@/src/hooks/useFileUpload';
+import {
+  useMessages,
+  useSendMessage,
+  useMarkAsRead,
+  useDeleteMessage,
+  useConversations,
+  useCreateGroup,
+  useCreateDirectConversation,
+  useFriends,
+  usePendingFriendRequests,
+  useBlockedUsers,
+  useAcceptFriendRequest,
+  useRejectFriendRequest,
+  useBlockUser,
+  useUnblockUser,
+  useCheckIfBlockedBy,
+  useUser,
+} from '../src/hooks/api';
+import { useQueryClient } from '@tanstack/react-query';
 
 export const ChatPage: React.FC = () => {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isCallOpen, setIsCallOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
-  const [users, setUsers] = useState<Record<string, User>>({});
-  const [friends, setFriends] = useState<User[]>([]);
-  const [pendingRequests, setPendingRequests] = useState<
-    PendingFriendRequest[]
-  >([]);
-  const [blockedUsers, setBlockedUsers] = useState<User[]>([]);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(
     new Set(['privacy'])
   ); // Default expand privacy section
-  const [isBlockedByOther, setIsBlockedByOther] = useState<boolean>(false);
-  const [isCheckingBlocked, setIsCheckingBlocked] = useState<boolean>(false);
-  const [blockedStatusCache, setBlockedStatusCache] = useState<
-    Record<string, boolean>
-  >({});
-  const [isLoadingBlockedUsers, setIsLoadingBlockedUsers] =
-    useState<boolean>(true);
 
   const activeConvIdRef = useRef<string | null>(null);
+  const currentUser = useAuthStore((state) => state.user);
+  const queryClient = useQueryClient();
 
-  const { user: currentUser } = useAuth();
+  // Typing store
+  const { setTyping, getTypingUsers } = useTypingStore();
+  const typingUserIds = activeConvId ? getTypingUsers(activeConvId) : [];
+
+  // React Query hooks
+  const { data: blockedUsers = [], isLoading: isLoadingBlockedUsers } =
+    useBlockedUsers();
+  const blockedUserIds = useMemo(
+    () => new Set(blockedUsers.map((u) => u.id)),
+    [blockedUsers]
+  );
+
+  const { data: conversations = [] } = useConversations(
+    blockedUserIds,
+    currentUser?.id
+  );
+  const { data: friends = [] } = useFriends();
+  const { data: pendingRequests = [] } = usePendingFriendRequests();
+  const { data: messages = [] } = useMessages(activeConvId);
+
+  const sendMessageMutation = useSendMessage(activeConvId);
+  const markAsReadMutation = useMarkAsRead(activeConvId);
+  const deleteMessageMutation = useDeleteMessage();
+  const createGroupMutation = useCreateGroup();
+  const createDirectConversationMutation = useCreateDirectConversation();
+  const acceptFriendRequestMutation = useAcceptFriendRequest();
+  const rejectFriendRequestMutation = useRejectFriendRequest();
+  const blockUserMutation = useBlockUser();
+  const unblockUserMutation = useUnblockUser();
+
+  // Get active conversation details
+  const activeConv = conversations.find((c) => c.id === activeConvId);
+  const participants = Array.isArray(activeConv?.participants)
+    ? activeConv.participants
+    : [];
+  const otherId = participants.find((id) => id !== currentUser?.id);
+
+  const { data: isBlockedByOther = false, isLoading: isCheckingBlocked } =
+    useCheckIfBlockedBy(otherId || null);
+  const { data: otherUser } = useUser(otherId || null);
+
+  // Create users map for compatibility with existing code
+  const users = useMemo(() => {
+    const userMap: Record<string, User> = {};
+    friends.forEach((user) => (userMap[user.id] = user));
+    if (currentUser) userMap[currentUser.id] = currentUser;
+    if (otherUser) userMap[otherUser.id] = otherUser;
+    return userMap;
+  }, [friends, currentUser, otherUser]);
 
   // Update ref when activeConvId changes
   useEffect(() => {
     activeConvIdRef.current = activeConvId;
   }, [activeConvId]);
 
-  // WebSocket Integration
+  // Set initial active conversation
+  useEffect(() => {
+    if (!activeConvId && conversations.length > 0 && conversations[0]) {
+      setActiveConvId(conversations[0].id);
+    }
+  }, [activeConvId, conversations]);
+
+  // WebSocket Integration with React Query
   useEffect(() => {
     if (!currentUser) return;
 
@@ -70,47 +149,26 @@ export const ChatPage: React.FC = () => {
         async (message: Message) => {
           const isActive = activeConvIdRef.current === message.conversationId;
 
-          // Handle new message
+          // Handle new message - update React Query cache
           if (isActive) {
-            setMessages((prev) => [...prev, message]);
-            // Mark as read immediately if in active room (user is viewing, so automatically read)
+            // Add message to cache optimistically
+            queryClient.setQueryData<Message[]>(
+              ['messages', message.conversationId],
+              (old = []) => [...old, message]
+            );
+
+            // Mark as read immediately if in active room
             try {
-              await client.post(`/chats/${message.conversationId}/read`);
-              // Refresh conversations to sync with backend after marking as read
-              setTimeout(() => loadConversations(), 300);
+              if (markAsReadMutation.mutateAsync) {
+                await markAsReadMutation.mutateAsync();
+              }
             } catch (err) {
               console.error('Failed to mark as read', err);
             }
           }
 
-          // Update conversations list
-          setConversations((prev) => {
-            const index = prev.findIndex(
-              (c) => c.id === message.conversationId
-            );
-            if (index !== -1) {
-              const current = prev[index];
-              // If active room, unreadCount is always 0 (user is viewing)
-              // If not active, increment unreadCount only if message is from others
-              const isMyMessage = message.senderId === currentUser?.id;
-              const unreadBase = current.unreadCount ?? 0;
-              const updatedConv: Conversation = {
-                ...current,
-                updatedAt: message.createdAt,
-                lastMessageId: message.id,
-                lastMessageContent: message.content,
-                lastMessageSenderId: message.senderId,
-                lastMessageAt: message.createdAt,
-                unreadCount: isActive ? 0 : isMyMessage ? 0 : unreadBase + 1,
-              };
-              const newConvs = [...prev];
-              newConvs.splice(index, 1);
-              newConvs.unshift(updatedConv);
-              return newConvs;
-            }
-            // If new conversation, we might want to fetch it. For now, just ignore or trigger a refetch.
-            return prev;
-          });
+          // Invalidate conversations to update last message and unread count
+          queryClient.invalidateQueries({ queryKey: ['conversations'] });
         }
       );
     });
@@ -118,341 +176,48 @@ export const ChatPage: React.FC = () => {
     return () => {
       webSocketService.disconnect();
     };
-  }, [currentUser]);
+  }, [currentUser, markAsReadMutation]);
 
-  const loadBlockedUsers = useCallback(
-    async (showLoading = true) => {
-      if (!currentUser) {
-        setIsLoadingBlockedUsers(false);
-        return;
-      }
-      try {
-        if (showLoading) setIsLoadingBlockedUsers(true);
-        const response = await client.get<User[]>('/friendships/blocked');
-        setBlockedUsers(response.data);
-      } catch (error) {
-        console.error('Failed to fetch blocked users', error);
-      } finally {
-        if (showLoading) setIsLoadingBlockedUsers(false);
-      }
-    },
-    [currentUser]
-  );
-
-  const loadConversations = useCallback(async () => {
-    try {
-      const response = await client.get<Conversation[]>('/chats');
-      // Trust backend unreadCount - only override for active room if we're currently viewing it
-      const updated = response.data.map((conv) => {
-        // If this is the active room and we're viewing it, ensure unreadCount = 0
-        // Otherwise, trust backend value
-        if (conv.id === activeConvId && activeConvId) {
-          return { ...conv, unreadCount: 0 };
-        }
-        return conv;
-      });
-
-      // Filter out conversations with users that current user has blocked (only for DIRECT conversations)
-      // User A blocks User B -> User A won't see conversation with User B
-      // ALWAYS filter based on current blockedUsers state to prevent flash
-      const blockedUserIds = new Set(blockedUsers.map((u) => u.id));
-      const filtered = updated.filter((conv) => {
-        if (conv.type === ConversationType.DIRECT) {
-          const participants = Array.isArray(conv.participants)
-            ? conv.participants
-            : [];
-          const otherId = participants.find((id) => id !== currentUser?.id);
-          if (!otherId) return true;
-
-          // Always filter out blocked users, even on initial load
-          // This prevents the flash of blocked conversations appearing then disappearing
-          return !blockedUserIds.has(otherId);
-        }
-        return true; // Keep all GROUP conversations
-      });
-
-      setConversations(filtered);
-      setActiveConvId((prev) => prev ?? filtered[0]?.id ?? null);
-      return filtered;
-    } catch (error) {
-      console.error('Failed to fetch conversations', error);
-      return [];
-    }
-  }, [activeConvId, blockedUsers, currentUser]);
-
-  // Load blocked users first, then conversations on initial load
+  // Subscribe to typing indicators for active conversation
   useEffect(() => {
-    const initData = async () => {
-      if (!currentUser) {
-        setIsLoadingBlockedUsers(false);
-        return;
+    if (!activeConvId || !webSocketService.isConnected()) return;
+
+    webSocketService.subscribeToTyping(activeConvId, (event: any) => {
+      if (event.userId !== currentUser?.id) {
+        if (event.isTyping) {
+          setTyping(activeConvId, event.userId, event.username || 'User');
+        }
       }
+    });
 
-      // Load blocked users first
-      let loadedBlockedUsers: User[] = [];
-      try {
-        setIsLoadingBlockedUsers(true);
-        const blockedResponse = await client.get<User[]>(
-          '/friendships/blocked'
-        );
-        setBlockedUsers(blockedResponse.data);
-        loadedBlockedUsers = blockedResponse.data;
-      } catch (error) {
-        console.error('Failed to fetch blocked users', error);
-      } finally {
-        setIsLoadingBlockedUsers(false);
-      }
-
-      // Then load conversations (which will filter based on freshly loaded blocked users)
-      try {
-        const response = await client.get<Conversation[]>('/chats');
-        const updated = response.data.map((conv) => {
-          if (conv.id === activeConvId && activeConvId) {
-            return { ...conv, unreadCount: 0 };
-          }
-          return conv;
-        });
-
-        const blockedUserIds = new Set(loadedBlockedUsers.map((u) => u.id));
-        const filtered = updated.filter((conv) => {
-          if (conv.type === ConversationType.DIRECT) {
-            const participants = Array.isArray(conv.participants)
-              ? conv.participants
-              : [];
-            const otherId = participants.find((id) => id !== currentUser?.id);
-            if (!otherId) return true;
-            return !blockedUserIds.has(otherId);
-          }
-          return true;
-        });
-
-        setConversations(filtered);
-        setActiveConvId((prev) => prev ?? filtered[0]?.id ?? null);
-      } catch (error) {
-        console.error('Failed to fetch conversations', error);
-      }
+    return () => {
+      webSocketService.unsubscribeFromTyping(activeConvId);
     };
-    initData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser?.id]); // Only depend on currentUser.id, not the whole object
+  }, [activeConvId, currentUser?.id, setTyping]);
 
-  // Auto-refresh conversations periodically
-  useEffect(() => {
-    const interval = setInterval(() => {
-      loadConversations();
-    }, 5000); // Refresh every 5 seconds
-    return () => clearInterval(interval);
-  }, [loadConversations]);
-
-  // Remove redundant visibility listener here (it was causing double fetches)
-  // The main visibility listener below handles everything
-
-  const normalizeMessages = (payload: { content?: Message[] } | Message[]) => {
-    if (Array.isArray(payload)) return payload;
-    return payload?.content ?? [];
-  };
-
-  const MESSAGE_POLL_INTERVAL_MS = 1200;
-
-  const fetchMessages = useCallback(async (conversationId: string) => {
-    try {
-      const response = await client.get<{ content?: Message[] } | Message[]>(
-        `/chats/${conversationId}/messages`
-      );
-      setMessages([...normalizeMessages(response.data)].reverse());
-    } catch (error) {
-      console.error('Failed to fetch messages', error);
-    }
-  }, []);
-
-  const fetchRecentMessages = useCallback(
-    async (conversationId: string) => {
-      try {
-        const last = messages[messages.length - 1];
-        if (!last) {
-          await fetchMessages(conversationId);
-          return;
-        }
-        const response = await client.get<Message[]>(
-          `/chats/${conversationId}/messages/recent`,
-          {
-            params: { since: last.createdAt },
-          }
-        );
-        if (response.data.length) {
-          setMessages((prev) => [...prev, ...response.data]);
-          // If this is the active room, mark as read (user is viewing, so automatically read)
-          if (activeConvIdRef.current === conversationId) {
-            try {
-              await client.post(`/chats/${conversationId}/read`);
-              // Refresh conversations to sync with backend
-              setTimeout(() => loadConversations(), 300);
-            } catch (err) {
-              console.error('Failed to mark as read', err);
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Failed to fetch recent messages', error);
-      }
-    },
-    [messages, fetchMessages, loadConversations]
-  );
-
-  // Fetch messages for active conversation and mark as read
+  // Mark conversation as read when entering the room
   useEffect(() => {
     if (!activeConvId) return;
-    fetchMessages(activeConvId);
 
-    // Mark conversation as read when entering the room (call backend)
     const markAsRead = async () => {
       try {
-        await client.post(`/chats/${activeConvId}/read`);
-        // Refresh conversations to sync with backend after marking as read
-        // This ensures lastReadAt is updated and unreadCount is correct
-        setTimeout(() => loadConversations(), 300);
+        await markAsReadMutation.mutateAsync();
       } catch (error) {
         console.error('Failed to mark as read', error);
       }
     };
     markAsRead();
-
-    // Update UI immediately (optimistic update)
-    setConversations((prev) =>
-      prev.map((conv) =>
-        conv.id === activeConvId ? { ...conv, unreadCount: 0 } : conv
-      )
-    );
-  }, [activeConvId, fetchMessages, loadConversations]);
-
-  // Poll only recent messages to keep near-realtime with minimal payload
-  useEffect(() => {
-    if (!activeConvId) return;
-    const interval = setInterval(
-      () => fetchRecentMessages(activeConvId),
-      MESSAGE_POLL_INTERVAL_MS
-    );
-    return () => clearInterval(interval);
-  }, [activeConvId, fetchRecentMessages]);
-
-  const loadFriends = useCallback(async () => {
-    if (!currentUser) return;
-    try {
-      const response = await client.get<User[]>('/friendships');
-      setUsers((prev) => {
-        const newUsers = { ...prev };
-        response.data.forEach((u) => (newUsers[u.id] = u));
-        if (currentUser) newUsers[currentUser.id] = currentUser;
-        return newUsers;
-      });
-      setFriends(response.data);
-    } catch (error) {
-      console.error('Failed to fetch users', error);
-    }
-  }, [currentUser]);
-
-  const loadPendingRequests = useCallback(async () => {
-    if (!currentUser) return;
-    try {
-      const response = await client.get<PendingFriendRequest[]>(
-        '/friendships/requests'
-      );
-      setPendingRequests(response.data);
-    } catch (error) {
-      console.error('Failed to fetch pending requests', error);
-    }
-  }, [currentUser]);
-
-  useEffect(() => {
-    loadFriends();
-  }, [loadFriends]);
-
-  useEffect(() => {
-    loadPendingRequests();
-  }, [loadPendingRequests]);
-
-  // Load blocked users periodically (initial load is handled in initData above)
-  useEffect(() => {
-    if (currentUser) {
-      const interval = setInterval(() => {
-        loadBlockedUsers(false); // Silent refresh
-      }, 30000); // Refresh every 30 seconds
-      return () => clearInterval(interval);
-    }
-  }, [currentUser, loadBlockedUsers]);
-
-  // Presence polling for friends
-  useEffect(() => {
-    const interval = setInterval(() => {
-      loadFriends();
-    }, 15000);
-    return () => clearInterval(interval);
-  }, [loadFriends]);
-
-  // Auto-refresh pending requests periodically
-  useEffect(() => {
-    const interval = setInterval(() => {
-      loadPendingRequests();
-    }, 10000); // Refresh every 10 seconds
-    return () => clearInterval(interval);
-  }, [loadPendingRequests]);
-
-  // Refresh all data when tab becomes visible
-  useEffect(() => {
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        loadFriends();
-        loadPendingRequests();
-        loadBlockedUsers(false); // Silent refresh
-        loadConversations();
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibility);
-    return () =>
-      document.removeEventListener('visibilitychange', handleVisibility);
-  }, [loadFriends, loadPendingRequests, loadBlockedUsers, loadConversations]);
+  }, [activeConvId, markAsReadMutation]);
 
   const handleSendMessage = async () => {
     if (!inputValue.trim() || !activeConvId) return;
 
     try {
-      const response = await client.post<Message>(
-        `/chats/${activeConvId}/messages`,
-        {
-          content: inputValue,
-          type: MessageType.TEXT,
-        }
-      );
+      await sendMessageMutation.mutateAsync({
+        content: inputValue,
+        type: MessageType.TEXT,
+      });
       setInputValue('');
-      // Refresh messages immediately (or wait for WebSocket)
-      // Waiting for WebSocket is better for consistency, but immediate feedback is nice.
-      // Let's rely on WebSocket for the incoming message, but we can optimistically add it if we want.
-      // For now, let's just fetch messages to be sure, or rely on WS.
-      // Actually, if we rely on WS, we don't need to fetch.
-      // But let's fetch just in case WS is slow or disconnected.
-      if (response.data) {
-        setMessages((prev) => [...prev, response.data]);
-        // Update conversation immediately
-        setConversations((prev) =>
-          prev.map((conv) =>
-            conv.id === activeConvId
-              ? {
-                  ...conv,
-                  updatedAt: response.data.createdAt,
-                  lastMessageId: response.data.id,
-                  lastMessageContent: response.data.content,
-                  lastMessageSenderId: response.data.senderId,
-                  lastMessageAt: response.data.createdAt,
-                  unreadCount: 0, // Mark as read since we're in the room
-                }
-              : conv
-          )
-        );
-        // Refresh conversations to sync with backend
-        setTimeout(() => loadConversations(), 500);
-      } else {
-        await fetchMessages(activeConvId);
-      }
     } catch (error) {
       console.error('Failed to send message', error);
       toast.error('Failed to send message');
@@ -473,58 +238,26 @@ export const ChatPage: React.FC = () => {
       const publicUrl = await uploadFile(file, activeConvId);
       if (!publicUrl) return;
 
-      const response = await client.post<Message>(
-        `/chats/${activeConvId}/messages`,
-        {
-          content: file.name || 'Attachment',
-          type: type,
-          attachmentUrl: publicUrl,
-          attachmentName: file.name,
-          attachmentSize: file.size,
-        }
-      );
-
-      if (response.data) {
-        setMessages((prev) => [...prev, response.data]);
-        // Update conversation immediately
-        setConversations((prev) =>
-          prev.map((conv) =>
-            conv.id === activeConvId
-              ? {
-                  ...conv,
-                  updatedAt: response.data.createdAt,
-                  lastMessageId: response.data.id,
-                  lastMessageContent:
-                    type === MessageType.IMAGE
-                      ? 'Sent an image'
-                      : type === MessageType.VIDEO
-                        ? 'Sent a video'
-                        : 'Sent a file',
-                  lastMessageSenderId: response.data.senderId,
-                  lastMessageAt: response.data.createdAt,
-                  unreadCount: 0,
-                }
-              : conv
-          )
-        );
-        setTimeout(() => loadConversations(), 500);
-      }
+      await sendMessageMutation.mutateAsync({
+        content: file.name || 'Attachment',
+        type: type,
+        attachmentUrl: publicUrl,
+        attachmentName: file.name,
+        attachmentSize: file.size,
+      });
     } catch (error) {
       console.error('Failed to send file message', error);
       toast.error('Failed to send file');
     } finally {
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      // Clear the file input
+      e.target.value = '';
     }
   };
 
   const handleCreateGroup = async (name: string, participantIds: string[]) => {
     try {
-      await client.post('/chats/group', {
-        name,
-        participantIds,
-      });
+      await createGroupMutation.mutateAsync({ name, participantIds });
       toast.success('Group created!');
-      await loadConversations();
     } catch (error) {
       console.error('Failed to create group', error);
       toast.error('Failed to create group');
@@ -546,16 +279,14 @@ export const ChatPage: React.FC = () => {
       return;
     }
     try {
-      const response = await client.post<Conversation>(
-        `/chats/direct/${friendId}`
-      );
-      await loadConversations();
-      if (response.data?.id) {
-        setActiveConvId(response.data.id);
+      const newConversation =
+        await createDirectConversationMutation.mutateAsync(friendId);
+      if (newConversation?.id) {
+        setActiveConvId(newConversation.id);
         toast.success('New chat room created');
       } else {
-        const updated = await loadConversations();
-        const created = findDirectConversation(updated, friendId);
+        // Fallback: find the conversation in the updated list
+        const created = findDirectConversation(conversations, friendId);
         if (created) {
           setActiveConvId(created.id);
           toast.success('New chat room created');
@@ -571,14 +302,8 @@ export const ChatPage: React.FC = () => {
 
   const handleAcceptFriendRequest = async (friendshipId: string) => {
     try {
-      await client.put(`/friendships/${friendshipId}/accept`);
+      await acceptFriendRequestMutation.mutateAsync(friendshipId);
       toast.success('Friend request accepted');
-      // Auto-refresh all data
-      await Promise.all([
-        loadFriends(),
-        loadPendingRequests(),
-        loadConversations(),
-      ]);
     } catch (error) {
       console.error('Failed to accept friend request', error);
       toast.error('Failed to accept request');
@@ -587,113 +312,43 @@ export const ChatPage: React.FC = () => {
 
   const handleRejectFriendRequest = async (friendshipId: string) => {
     try {
-      await client.put(`/friendships/${friendshipId}/reject`);
+      await rejectFriendRequestMutation.mutateAsync(friendshipId);
       toast.success('Friend request rejected');
-      // Auto-refresh pending requests
-      await loadPendingRequests();
     } catch (error) {
       console.error('Failed to reject friend request', error);
       toast.error('Failed to reject request');
     }
   };
 
-  const activeConv = conversations.find((c) => c.id === activeConvId);
+  const handleAddReaction = async (messageId: string, emoji: string) => {
+    try {
+      const { reactionApi } = await import('../src/api/reactions');
+      await reactionApi.addReaction(messageId, emoji);
 
-  // Calculate otherId outside useEffect to use as stable dependency
-  const participants = Array.isArray(activeConv?.participants)
-    ? activeConv.participants
-    : [];
-  const otherId = participants.find((id) => id !== currentUser?.id);
-
-  // Reset blocked status when conversation changes
-  useEffect(() => {
-    setIsBlockedByOther(false);
-    setIsCheckingBlocked(true); // Default to checking to prevent flash of input area
-  }, [activeConvId]);
-
-  // Check if current user is blocked by the other user and load other user info
-  useEffect(() => {
-    const checkIfBlockedByOtherAndLoadUser = async () => {
-      if (
-        !activeConvId ||
-        !activeConv ||
-        activeConv.type !== ConversationType.DIRECT ||
-        !currentUser ||
-        !otherId
-      ) {
-        setIsBlockedByOther(false);
-        setIsCheckingBlocked(false);
-        return;
+      // Invalidate messages query to refetch with updated reactions
+      queryClient.invalidateQueries({ queryKey: ['messages', activeConvId] });
+    } catch (error: any) {
+      console.error('Failed to add reaction', error);
+      if (error.response?.status === 409) {
+        toast.error('You already reacted with this emoji');
+      } else {
+        toast.error('Failed to add reaction');
       }
+    }
+  };
 
-      // Check cache first - if we already know the blocked status for this conversation, use it
-      const cacheKey = `${activeConvId}-${otherId}`;
-      if (blockedStatusCache[cacheKey] !== undefined) {
-        setIsBlockedByOther(blockedStatusCache[cacheKey]);
-        setIsCheckingBlocked(false);
-        // Still load user info if not already loaded
-        if (!users[otherId]) {
-          try {
-            const userResponse = await client.get<User>(`/users/${otherId}`);
-            setUsers((prev) => ({
-              ...prev,
-              [otherId]: userResponse.data,
-            }));
-          } catch (error) {
-            console.error('Failed to load other user info', error);
-          }
-        }
-        return;
-      }
+  const handleRemoveReaction = async (messageId: string, emoji: string) => {
+    try {
+      const { reactionApi } = await import('../src/api/reactions');
+      await reactionApi.removeReaction(messageId, emoji);
 
-      // Set checking state to prevent showing input area prematurely
-      setIsCheckingBlocked(true);
-
-      try {
-        // Check if blocked by other user - do this first and in parallel with loading user info
-        const [blockedResponse, userResponse] = await Promise.all([
-          client.get<boolean>(`/friendships/blocked-by/${otherId}`),
-          // Load other user info even if blocked (so we can display their name and avatar)
-          // This is important: User B should still see User A's info even if User A blocked User B
-          users[otherId]
-            ? Promise.resolve({ data: users[otherId] })
-            : client
-                .get<User>(`/users/${otherId}`)
-                .catch(() => ({ data: null })),
-        ]);
-
-        const isBlocked = blockedResponse.data;
-        setIsBlockedByOther(isBlocked);
-
-        // Cache the blocked status for this conversation
-        setBlockedStatusCache((prev) => ({
-          ...prev,
-          [cacheKey]: isBlocked,
-        }));
-
-        // Update user info if loaded
-        if (userResponse.data && !users[otherId]) {
-          setUsers((prev) => ({
-            ...prev,
-            [otherId]: userResponse.data,
-          }));
-        }
-      } catch (error) {
-        console.error('Failed to check if blocked by other', error);
-        setIsBlockedByOther(false);
-        // Cache false if check fails
-        setBlockedStatusCache((prev) => ({
-          ...prev,
-          [cacheKey]: false,
-        }));
-      } finally {
-        setIsCheckingBlocked(false);
-      }
-    };
-
-    checkIfBlockedByOtherAndLoadUser();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeConvId, otherId, currentUser?.id]); // Only depend on stable IDs
+      // Invalidate messages query to refetch with updated reactions
+      queryClient.invalidateQueries({ queryKey: ['messages', activeConvId] });
+    } catch (error) {
+      console.error('Failed to remove reaction', error);
+      toast.error('Failed to remove reaction');
+    }
+  };
 
   // Helper to get chat header info
   const getHeaderInfo = () => {
@@ -793,22 +448,53 @@ export const ChatPage: React.FC = () => {
               isInfoOpen={isRightSidebarOpen}
             />
 
-            <ChatMessageList
+            <VirtualizedMessageList
               messages={messages}
               currentUserId={currentUser?.id || ''}
               users={users}
+              height={window.innerHeight - 200} // Adjust based on header and input heights
               onDeleteMessage={async (messageId: string) => {
                 try {
-                  await client.delete(`/chats/messages/${messageId}`);
-                  setMessages((prev) => prev.filter((m) => m.id !== messageId));
-                  setTimeout(() => loadConversations(), 300);
+                  await deleteMessageMutation.mutateAsync(messageId);
                   toast.success('Message deleted');
                 } catch (error) {
                   console.error('Failed to delete message', error);
                   toast.error('Failed to delete message');
                 }
               }}
+              onEditMessage={async (messageId: string, newContent: string) => {
+                try {
+                  const { editMessage } = await import('../src/api/messages');
+                  await editMessage(messageId, newContent);
+
+                  // Invalidate messages query to refetch with updated message
+                  queryClient.invalidateQueries({
+                    queryKey: ['messages', activeConvId],
+                  });
+                  toast.success('Message edited');
+                } catch (error: any) {
+                  console.error('Failed to edit message', error);
+                  if (error.response?.status === 401) {
+                    toast.error(
+                      'Cannot edit this message (either not yours, deleted, or past 15-minute edit window)'
+                    );
+                  } else {
+                    toast.error('Failed to edit message');
+                  }
+                }
+              }}
+              onAddReaction={handleAddReaction}
+              onRemoveReaction={handleRemoveReaction}
             />
+
+            {/* Typing Indicator */}
+            {typingUserIds.length > 0 && (
+              <TypingIndicator
+                usernames={typingUserIds.map(
+                  (id) => users[id]?.fullName || users[id]?.username || 'User'
+                )}
+              />
+            )}
 
             {/* Input Area - Hidden when blocked by other user or while checking */}
             {!isBlockedByOther && !isCheckingBlocked && (
@@ -818,6 +504,7 @@ export const ChatPage: React.FC = () => {
                 onSend={handleSendMessage}
                 onFileSelect={handleFileSelect}
                 isUploading={isUploading}
+                conversationId={activeConvId}
               />
             )}
 
@@ -840,47 +527,51 @@ export const ChatPage: React.FC = () => {
         )}
 
         {/* Video Call Overlay */}
-        <VideoCall
-          isOpen={isCallOpen}
-          onClose={() => setIsCallOpen(false)}
-          peerName={headerInfo.title}
-          peerAvatar={headerInfo.avatar}
-        />
+        {isCallOpen && (
+          <Suspense
+            fallback={
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                <SkeletonLoader width="400px" height="300px" />
+              </div>
+            }
+          >
+            <VideoCall
+              isOpen={isCallOpen}
+              onClose={() => setIsCallOpen(false)}
+              peerName={headerInfo.title}
+              peerAvatar={headerInfo.avatar}
+            />
+          </Suspense>
+        )}
       </div>
 
       {/* Settings Modal */}
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        blockedUsers={blockedUsers}
-        onUnblock={async (userId: string) => {
-          try {
-            await client.delete(`/friendships/block/${userId}`);
-            toast.success('User unblocked successfully');
-
-            // Clear blocked status cache for all conversations with this user
-            setBlockedStatusCache((prev) => {
-              const newCache = { ...prev };
-              Object.keys(newCache).forEach((key) => {
-                if (key.endsWith(`-${userId}`)) {
-                  delete newCache[key];
-                }
-              });
-              return newCache;
-            });
-
-            await Promise.all([
-              loadBlockedUsers(),
-              loadFriends(),
-              loadPendingRequests(),
-              loadConversations(),
-            ]);
-          } catch (error) {
-            console.error('Failed to unblock user', error);
-            toast.error('Failed to unblock user');
+      {isSettingsOpen && (
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+              <div className="bg-slate-900 rounded-lg p-6">
+                <SkeletonLoader width="400px" height="300px" />
+              </div>
+            </div>
           }
-        }}
-      />
+        >
+          <SettingsModal
+            isOpen={isSettingsOpen}
+            onClose={() => setIsSettingsOpen(false)}
+            blockedUsers={blockedUsers}
+            onUnblock={async (userId: string) => {
+              try {
+                await unblockUserMutation.mutateAsync(userId);
+                toast.success('User unblocked successfully');
+              } catch (error) {
+                console.error('Failed to unblock user', error);
+                toast.error('Failed to unblock user');
+              }
+            }}
+          />
+        </Suspense>
+      )}
 
       {/* Optional Right Sidebar (Details) - Toggleable */}
       {activeConvId && isRightSidebarOpen && (
@@ -1162,14 +853,6 @@ export const ChatPage: React.FC = () => {
                         </button>
                         <button
                           onClick={async () => {
-                            const participants = Array.isArray(
-                              activeConv.participants
-                            )
-                              ? activeConv.participants
-                              : [];
-                            const otherId = participants.find(
-                              (id) => id !== currentUser?.id
-                            );
                             if (!otherId) return;
 
                             if (
@@ -1181,34 +864,15 @@ export const ChatPage: React.FC = () => {
                             }
 
                             try {
-                              // First unfriend if they are friends
-                              try {
-                                await client.delete(`/friendships/${otherId}`);
-                              } catch (e) {
-                                // Ignore if not friends
-                              }
-                              // Then block
-                              await client.post(
-                                `/friendships/block/${otherId}`
-                              );
+                              await blockUserMutation.mutateAsync(otherId);
                               toast.success('User blocked successfully');
 
-                              // Clear blocked status cache for this conversation
-                              const cacheKey = `${activeConv.id}-${otherId}`;
-                              setBlockedStatusCache((prev) => {
-                                const newCache = { ...prev };
-                                delete newCache[cacheKey];
-                                return newCache;
-                              });
-
-                              await Promise.all([
-                                loadBlockedUsers(),
-                                loadFriends(),
-                                loadPendingRequests(),
-                                loadConversations(),
-                              ]);
                               // Close the conversation if it's the blocked user
-                              if (activeConvId === activeConv.id) {
+                              if (
+                                activeConvId &&
+                                activeConv &&
+                                activeConvId === activeConv.id
+                              ) {
                                 setActiveConvId(null);
                               }
                             } catch (error) {

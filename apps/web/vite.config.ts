@@ -33,6 +33,43 @@ export default defineConfig(({ mode }) => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            // Vendor chunks
+            'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+            'query-vendor': ['@tanstack/react-query'],
+            'ui-vendor': ['lucide-react', 'react-hot-toast'],
+            'websocket-vendor': ['@stomp/stompjs', 'sockjs-client'],
+
+            // Feature chunks
+            'auth-pages': [
+              './pages/LoginPage.tsx',
+              './pages/RegisterPage.tsx',
+              './pages/ForgotPasswordPage.tsx',
+            ],
+            'chat-page': ['./pages/ChatPage.tsx'],
+            stores: [
+              './src/stores/authStore.ts',
+              './src/stores/chatStore.ts',
+              './src/stores/notificationStore.ts',
+              './src/stores/typingStore.ts',
+              './src/stores/userStore.ts',
+            ],
+            'api-hooks': [
+              './src/hooks/api/useMessages.ts',
+              './src/hooks/api/useConversations.ts',
+              './src/hooks/api/useFriends.ts',
+            ],
+          },
+        },
+      },
+      // Optimize chunk size
+      chunkSizeWarningLimit: 500,
+      // Enable source maps for debugging
+      sourcemap: mode === 'development',
+    },
     test: {
       globals: true,
       environment: 'jsdom',

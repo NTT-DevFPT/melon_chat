@@ -1,5 +1,6 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Paperclip, Smile, Send, Image as ImageIcon } from 'lucide-react';
+import { webSocketService } from '@/src/services/WebSocketService';
 
 const EMOJIS = [
   '🍉',
@@ -35,6 +36,7 @@ interface ChatInputProps {
   onSend: () => void;
   onFileSelect: (e: React.ChangeEvent<HTMLInputElement>) => void;
   isUploading?: boolean;
+  conversationId?: string | null;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
@@ -43,20 +45,81 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   onSend,
   onFileSelect,
   isUploading = false,
+  conversationId = null,
 }) => {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isTypingRef = useRef(false);
 
   const handleAddEmoji = (emoji: string) => {
     onChange(value + emoji);
   };
 
+  // Debounced typing indicator
+  const sendTypingIndicator = useCallback(
+    (isTyping: boolean) => {
+      if (conversationId && webSocketService.isConnected()) {
+        webSocketService.sendTypingIndicator(conversationId, isTyping);
+        isTypingRef.current = isTyping;
+      }
+    },
+    [conversationId]
+  );
+
+  // Handle input change with typing indicator
+  const handleInputChange = useCallback(
+    (newValue: string) => {
+      onChange(newValue);
+
+      if (!conversationId) return;
+
+      // Send typing indicator if not already sent
+      if (!isTypingRef.current && newValue.trim()) {
+        sendTypingIndicator(true);
+      }
+
+      // Clear existing timeout
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+
+      // Set new timeout to stop typing indicator after 3 seconds
+      if (newValue.trim()) {
+        typingTimeoutRef.current = setTimeout(() => {
+          sendTypingIndicator(false);
+        }, 3000);
+      } else {
+        // If input is empty, stop typing immediately
+        sendTypingIndicator(false);
+      }
+    },
+    [conversationId, onChange, sendTypingIndicator]
+  );
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
+      // Stop typing indicator when sending
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+      sendTypingIndicator(false);
       onSend();
     }
   };
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+      if (isTypingRef.current && conversationId) {
+        sendTypingIndicator(false);
+      }
+    };
+  }, [conversationId, sendTypingIndicator]);
 
   // Close emoji picker when clicking outside
   useEffect(() => {
@@ -129,7 +192,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         <input
           type="text"
           value={value}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => handleInputChange(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Type your message..."
           className="flex-1 bg-transparent text-slate-200 px-4 py-2 focus:outline-none placeholder-slate-500"

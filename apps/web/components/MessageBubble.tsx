@@ -1,13 +1,26 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Message, MessageType, User } from '../types';
-import { Check, CheckCheck, FileText, Trash2 } from 'lucide-react';
+import {
+  Check,
+  CheckCheck,
+  FileText,
+  Trash2,
+  Smile,
+  Edit2,
+} from 'lucide-react';
+import { ReactionPicker } from './ReactionPicker';
+import { ReactionDisplay } from './ReactionDisplay';
 
 interface MessageBubbleProps {
   message: Message;
   isMe: boolean;
   sender?: User;
   showAvatar: boolean;
+  currentUserId: string;
   onDelete?: () => void;
+  onEdit?: (newContent: string) => void;
+  onAddReaction?: (emoji: string) => void;
+  onRemoveReaction?: (emoji: string) => void;
 }
 
 export const MessageBubble: React.FC<MessageBubbleProps> = ({
@@ -15,11 +28,72 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   isMe,
   sender,
   showAvatar,
+  currentUserId,
   onDelete,
+  onEdit,
+  onAddReaction,
+  onRemoveReaction,
 }) => {
+  const [showReactionPicker, setShowReactionPicker] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editContent, setEditContent] = useState(message.content || '');
+
   const formatTime = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const canEdit = () => {
+    if (!isMe || message.type !== MessageType.TEXT) return false;
+
+    // Check if message is within 15 minutes of creation
+    const createdAt = new Date(message.createdAt);
+    const now = new Date();
+    const fifteenMinutes = 15 * 60 * 1000;
+    return now.getTime() - createdAt.getTime() < fifteenMinutes;
+  };
+
+  const handleReactionClick = (emoji: string) => {
+    // Check if user already reacted with this emoji
+    const userReaction = message.reactions?.find(
+      (r) => r.emoji === emoji && r.userId === currentUserId
+    );
+
+    if (userReaction) {
+      onRemoveReaction?.(emoji);
+    } else {
+      onAddReaction?.(emoji);
+    }
+  };
+
+  const handleAddReaction = (emoji: string) => {
+    onAddReaction?.(emoji);
+  };
+
+  const handleEditClick = () => {
+    setIsEditing(true);
+    setEditContent(message.content || '');
+  };
+
+  const handleEditSave = () => {
+    if (editContent.trim() && editContent !== message.content) {
+      onEdit?.(editContent.trim());
+    }
+    setIsEditing(false);
+  };
+
+  const handleEditCancel = () => {
+    setIsEditing(false);
+    setEditContent(message.content || '');
+  };
+
+  const handleEditKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleEditSave();
+    } else if (e.key === 'Escape') {
+      handleEditCancel();
+    }
   };
 
   return (
@@ -59,16 +133,51 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
             borderBottomLeftRadius: !isMe ? '0' : undefined,
           }}
         >
-          {/* Delete button (only for my messages) */}
-          {isMe && onDelete && (
-            <button
-              type="button"
-              onClick={onDelete}
-              className="absolute -top-2 -right-2 bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white rounded-full p-1 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"
-              title="Delete message"
-            >
-              <Trash2 size={14} />
-            </button>
+          {/* Action buttons - hide for deleted messages */}
+          {!message.deletedAt && (
+            <div className="absolute -top-2 -right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              {/* Reaction button */}
+              <button
+                type="button"
+                onClick={() => setShowReactionPicker(!showReactionPicker)}
+                className="bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white rounded-full p-1 shadow-sm"
+                title="Add reaction"
+              >
+                <Smile size={14} />
+              </button>
+
+              {/* Edit button (only for my text messages within 15 minutes) */}
+              {canEdit() && onEdit && (
+                <button
+                  type="button"
+                  onClick={handleEditClick}
+                  className="bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white rounded-full p-1 shadow-sm"
+                  title="Edit message"
+                >
+                  <Edit2 size={14} />
+                </button>
+              )}
+
+              {/* Delete button (only for my messages) */}
+              {isMe && onDelete && (
+                <button
+                  type="button"
+                  onClick={onDelete}
+                  className="bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white rounded-full p-1 shadow-sm"
+                  title="Delete message"
+                >
+                  <Trash2 size={14} />
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Reaction Picker */}
+          {showReactionPicker && (
+            <ReactionPicker
+              onSelectEmoji={handleAddReaction}
+              onClose={() => setShowReactionPicker(false)}
+            />
           )}
           {/* Image Attachments */}
           {message.type === MessageType.IMAGE &&
@@ -126,21 +235,55 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
             )}
 
           {/* Text Content */}
-          {message.content && (
-            <p className="text-sm leading-relaxed whitespace-pre-wrap">
+          {message.content && !isEditing && (
+            <p
+              className={`text-sm leading-relaxed whitespace-pre-wrap ${message.deletedAt ? 'italic opacity-60' : ''}`}
+            >
               {message.content}
             </p>
           )}
 
+          {/* Edit Mode */}
+          {isEditing && (
+            <div className="w-full">
+              <textarea
+                value={editContent}
+                onChange={(e) => setEditContent(e.target.value)}
+                onKeyDown={handleEditKeyDown}
+                className="w-full min-h-[60px] p-2 text-sm bg-white/10 border border-white/20 rounded text-white resize-none focus:outline-none focus:border-white/40"
+                autoFocus
+              />
+              <div className="flex gap-2 mt-2">
+                <button
+                  type="button"
+                  onClick={handleEditSave}
+                  className="px-3 py-1 text-xs bg-white/20 hover:bg-white/30 rounded transition-colors"
+                >
+                  Save
+                </button>
+                <button
+                  type="button"
+                  onClick={handleEditCancel}
+                  className="px-3 py-1 text-xs bg-white/10 hover:bg-white/20 rounded transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Timestamp & Status */}
           <div
-            className="text-[10px] mt-1 flex items-center"
+            className="text-[10px] mt-1 flex items-center gap-1"
             style={{
               justifyContent: isMe ? 'flex-end' : 'flex-start',
               color: isMe ? 'rgba(255, 255, 255, 0.8)' : '#94a3b8',
             }}
           >
             <span>{formatTime(message.createdAt)}</span>
+            {message.isEdited && (
+              <span className="italic opacity-70">(edited)</span>
+            )}
             {isMe && (
               <span className="ml-1">
                 {message.status === 'SENT' && <Check size={12} />}
@@ -152,6 +295,16 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
             )}
           </div>
         </div>
+
+        {/* Reaction Display */}
+        {message.reactions && message.reactions.length > 0 && (
+          <ReactionDisplay
+            reactions={message.reactions}
+            reactionCounts={message.reactionCounts || {}}
+            currentUserId={currentUserId}
+            onReactionClick={handleReactionClick}
+          />
+        )}
       </div>
     </div>
   );

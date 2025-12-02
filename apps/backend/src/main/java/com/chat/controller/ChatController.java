@@ -1,13 +1,16 @@
 package com.chat.controller;
 
+import com.chat.dto.chat.AddReactionRequest;
 import com.chat.dto.chat.ChatRoomResponse;
 import com.chat.dto.chat.CreateGroupRequest;
+import com.chat.dto.chat.MessageReactionResponse;
 import com.chat.dto.chat.SendMessageRequest;
 import com.chat.model.ChatRoom;
 import com.chat.model.Message;
 import com.chat.model.enums.MessageType;
 import com.chat.security.UserPrincipal;
 import com.chat.service.ChatRoomService;
+import com.chat.service.MessageReactionService;
 import com.chat.service.MessageService;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,6 +20,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -28,6 +32,9 @@ public class ChatController {
 
     @Autowired
     private MessageService messageService;
+
+    @Autowired
+    private MessageReactionService reactionService;
 
     @PostMapping("/direct/{userId}")
     public ResponseEntity<ChatRoomResponse> createDirectChat(@AuthenticationPrincipal UserPrincipal currentUser,
@@ -115,5 +122,51 @@ public class ChatController {
             @PathVariable UUID messageId) {
         messageService.deleteMessage(messageId, currentUser.getId());
         return ResponseEntity.ok().build();
+    }
+
+    @PutMapping("/messages/{messageId}")
+    public ResponseEntity<Message> editMessage(@AuthenticationPrincipal UserPrincipal currentUser,
+            @PathVariable UUID messageId,
+            @Valid @RequestBody com.chat.dto.chat.EditMessageRequest request) {
+        Message message = messageService.editMessage(messageId, currentUser.getId(), request.getContent());
+        return ResponseEntity.ok(message);
+    }
+
+    // Message Reaction Endpoints
+
+    @PostMapping("/messages/{messageId}/reactions")
+    public ResponseEntity<MessageReactionResponse> addReaction(
+            @AuthenticationPrincipal UserPrincipal currentUser,
+            @PathVariable UUID messageId,
+            @Valid @RequestBody AddReactionRequest request) {
+        MessageReactionResponse reaction = reactionService.addReaction(
+                messageId, 
+                currentUser.getId(), 
+                request.getEmoji()
+        );
+        return ResponseEntity.ok(reaction);
+    }
+
+    @DeleteMapping("/messages/{messageId}/reactions/{emoji}")
+    public ResponseEntity<?> removeReaction(
+            @AuthenticationPrincipal UserPrincipal currentUser,
+            @PathVariable UUID messageId,
+            @PathVariable String emoji) {
+        reactionService.removeReaction(messageId, currentUser.getId(), emoji);
+        return ResponseEntity.ok().build();
+    }
+
+    @GetMapping("/messages/{messageId}/reactions")
+    public ResponseEntity<List<MessageReactionResponse>> getMessageReactions(
+            @PathVariable UUID messageId) {
+        List<MessageReactionResponse> reactions = reactionService.getMessageReactions(messageId);
+        return ResponseEntity.ok(reactions);
+    }
+
+    @GetMapping("/messages/{messageId}/reactions/counts")
+    public ResponseEntity<Map<String, Long>> getReactionCounts(
+            @PathVariable UUID messageId) {
+        Map<String, Long> counts = reactionService.getReactionCounts(messageId);
+        return ResponseEntity.ok(counts);
     }
 }

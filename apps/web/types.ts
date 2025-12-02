@@ -69,6 +69,14 @@ export interface Attachment {
   size: number;
 }
 
+export interface MessageReaction {
+  id: string;
+  messageId: string;
+  userId: string;
+  emoji: string;
+  createdAt: string;
+}
+
 export interface Message {
   id: string;
   conversationId: string;
@@ -82,6 +90,11 @@ export interface Message {
   createdAt: string;
   status: 'SENDING' | 'SENT' | 'DELIVERED' | 'READ';
   replyToId?: string;
+  reactions?: MessageReaction[];
+  reactionCounts?: Record<string, number>;
+  isEdited?: boolean;
+  editedAt?: string;
+  deletedAt?: string;
 }
 
 // --- Call Service (Signaling/WebRTC) ---

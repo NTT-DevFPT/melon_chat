@@ -136,10 +136,48 @@ public class MessageService {
             throw new UnauthorizedException("You can only delete your own messages");
         }
 
+        // Replace content with deletion placeholder
+        message.setContent("[Message deleted]");
+        message.setAttachmentUrl(null);
+        message.setAttachmentName(null);
+        message.setAttachmentSize(null);
+        // Change type to TEXT to avoid validation issues with null attachments
+        message.setType(MessageType.TEXT);
         message.softDelete();
         messageRepository.save(message);
 
         logger.info("Message {} deleted by {}", messageId, userId);
+    }
+
+    /**
+     * Edit message content
+     */
+    @Transactional
+    public Message editMessage(UUID messageId, UUID userId, String newContent) {
+        Message message = messageRepository.findById(messageId)
+                .orElseThrow(() -> new ResourceNotFoundException("Message", "id", messageId));
+
+        // Only sender can edit
+        if (!message.getSenderId().equals(userId)) {
+            throw new UnauthorizedException("You can only edit your own messages");
+        }
+
+        // Check if message can be edited (within 15 minutes and not deleted)
+        if (!message.canBeEdited()) {
+            throw new UnauthorizedException("Message cannot be edited (either deleted or past 15-minute edit window)");
+        }
+
+        // Only text messages can be edited
+        if (message.getType() != MessageType.TEXT) {
+            throw new UnauthorizedException("Only text messages can be edited");
+        }
+
+        message.setContent(newContent);
+        message.markAsEdited();
+        Message savedMessage = messageRepository.save(message);
+
+        logger.info("Message {} edited by {}", messageId, userId);
+        return savedMessage;
     }
 
     /**
